@@ -10,7 +10,7 @@
       "url": "git@github.com:t2y/chief-of-staff-agent-skill.git",
       "provider": "github",
       "link_mode": "local-only",
-      "revision": "fc8966723dbbdc37a466f6637f175449b8b4519d"
+      "revision": "116f81a99d50df62e63e78ab79e0cbc85053d964"
     }
   },
   "components": [
