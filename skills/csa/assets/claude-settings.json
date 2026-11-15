@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(herdr agent get:*)",
+      "Bash(herdr agent list:*)",
+      "Bash(herdr agent read:*)",
+      "Bash(herdr agent wait:*)",
+      "Bash(csa status:*)",
+      "Bash(csa peek:*)",
+      "Bash(csa approve:*)",
+      "Bash(csa version:*)",
+      "Bash(csa doctor:*)",
+      "Bash(gh issue view:*)"
+    ],
+    "deny": [
+      "Edit",
+      "Write"
+    ]
+  }
+}

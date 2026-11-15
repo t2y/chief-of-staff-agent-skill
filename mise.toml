@@ -1,0 +1,12 @@
+# 開発用の設定。csa の利用者には関係しない
+[tools]
+"aqua:bats-core/bats-core" = "latest"
+"aqua:koalaman/shellcheck" = "latest"
+
+[tasks.lint]
+description = "shellcheck でスクリプトを検査する"
+run = "shellcheck skills/csa/scripts/csa test/fake-bin/herdr test/fake-bin/claude"
+
+[tasks.test]
+description = "bats でテストを実行する"
+run = "bats test"
