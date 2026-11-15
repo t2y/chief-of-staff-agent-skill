@@ -13,13 +13,16 @@ setup() {
   mkdir -p "$HOME"
 }
 
+# csa を実行する。CSA_BASH で bash を指定できる(CI の macOS では /bin/bash 3.2 で csa を確かめる)
+csa_run() { "${CSA_BASH:-bash}" "$CSA" "$@"; }
+
 # 課題を 1 件 spawn した状態を作る
 spawn_issue() {
-  "$CSA" init >/dev/null 2>&1
+  csa_run init >/dev/null 2>&1
   local repo="$BATS_TEST_TMPDIR/repo"
   git init -q "$repo"
   git -C "$repo" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m init
-  echo "brief of $1" | "$CSA" spawn "$1" "$repo" -
+  echo "brief of $1" | csa_run spawn "$1" "$repo" -
 }
 
 # 基本的なコマンドだけを置いた PATH を作る(省くツールを引数で指定する)
@@ -38,7 +41,7 @@ restricted_path() {
 @test "init: 必須ツールが欠けていれば、すべて列挙して何も作らずに失敗する" {
   local rpath
   rpath=$(restricted_path jq git)
-  run env PATH="$rpath" bash "$CSA" init
+  run env PATH="$rpath" bash csa_run init
   [ "$status" -eq 1 ]
   [[ "$output" == *"- jq"* ]]
   [[ "$output" == *"- git"* ]]
@@ -47,24 +50,24 @@ restricted_path() {
 }
 
 @test "init: herdr のバージョンが違えば警告するが、処理は続ける" {
-  FAKE_HERDR_VERSION=9.9.9 run "$CSA" init
+  FAKE_HERDR_VERSION=9.9.9 run csa_run init
   [ "$status" -eq 0 ]
   [[ "$output" == *"herdr 9.9.9 は未確認のバージョン"* ]]
   [ -d "$CSA_HOME/tasks" ]
 }
 
 @test "init: テンプレートを上書きし、local ファイルには触れず、2 回目で差分が出ない" {
-  "$CSA" init
+  csa_run init
   echo "my rule" >"$CSA_HOME/CLAUDE.local.md"
   echo "edited" >"$CSA_HOME/AGENTS.md"
-  "$CSA" init
+  csa_run init
   cmp "$CSA_HOME/AGENTS.md" "$REPO_ROOT/skills/csa/assets/AGENTS.md"
   cmp "$CSA_HOME/.claude/settings.json" "$REPO_ROOT/skills/csa/assets/claude-settings.json"
   [ "$(cat "$CSA_HOME/CLAUDE.local.md")" = "my rule" ]
   [ "$(readlink -f "$CSA_BIN_DIR/csa")" = "$(readlink -f "$CSA")" ]
   local before after
   before=$(cd "$CSA_HOME" && find . -type f -exec cksum {} + | sort)
-  "$CSA" init
+  csa_run init
   after=$(cd "$CSA_HOME" && find . -type f -exec cksum {} + | sort)
   [ "$before" = "$after" ]
 }
@@ -72,7 +75,7 @@ restricted_path() {
 @test "init: 別の場所を指す csa があれば上書きせずに失敗する" {
   mkdir -p "$CSA_BIN_DIR"
   ln -s /bin/true "$CSA_BIN_DIR/csa"
-  run "$CSA" init
+  run csa_run init
   [ "$status" -eq 1 ]
   [[ "$output" == *"すでに別の場所"* ]]
   [ "$(readlink "$CSA_BIN_DIR/csa")" = /bin/true ]
@@ -81,18 +84,18 @@ restricted_path() {
 @test "init: リンク切れの csa は張り直す" {
   mkdir -p "$CSA_BIN_DIR"
   ln -s "$BATS_TEST_TMPDIR/gone/csa" "$CSA_BIN_DIR/csa"
-  run "$CSA" init
+  run csa_run init
   [ "$status" -eq 0 ]
   [ "$(readlink -f "$CSA_BIN_DIR/csa")" = "$(readlink -f "$CSA")" ]
 }
 
 @test "init: Claude Code の settings.json に Worker 用の allow がなければ推奨を表示する" {
-  run "$CSA" init
+  run csa_run init
   [[ "$output" == *'"Bash(csa report:*)"'* ]]
   [[ "$output" == *'"Edit(~/.csa/plans/**)"'* ]]
   mkdir -p "$HOME/.claude"
   echo '{"permissions":{"allow":["Bash(csa report:*)","Edit(~/.csa/plans/**)","Write(~/.csa/plans/**)"]}}' >"$HOME/.claude/settings.json"
-  run "$CSA" init
+  run csa_run init
   [[ "$output" != *"推奨します"* ]]
 }
 
@@ -137,17 +140,17 @@ restricted_path() {
 
 @test "peek: スクロールバックが空なら見えている画面を読む" {
   spawn_issue PROJ-9
-  run "$CSA" peek PROJ-9
+  run csa_run peek PROJ-9
   [[ "$output" == *"recent-unwrapped"* ]]
-  FAKE_HERDR_ALT_SCREEN=1 run "$CSA" peek PROJ-9
+  FAKE_HERDR_ALT_SCREEN=1 run csa_run peek PROJ-9
   [[ "$output" == *"--source visible"* ]]
 }
 
 @test "report: タスクファイルの状態とログを更新し、working 以外は CSA に知らせる" {
   spawn_issue PROJ-3
-  "$CSA" report PROJ-3 working "見積もり: plan 不要"
+  csa_run report PROJ-3 working "見積もり: plan 不要"
   ! grep -q '^=== csa' "$FAKE_HERDR_DIR/prompts.log"
-  "$CSA" report PROJ-3 review "done on csa/PROJ-3"
+  csa_run report PROJ-3 review "done on csa/PROJ-3"
   grep -q '^status: review$' "$CSA_HOME/tasks/PROJ-3.md"
   grep -q 'working: 見積もり: plan 不要' "$CSA_HOME/tasks/PROJ-3.md"
   grep -q '^\[report\] PROJ-3 review: done on csa/PROJ-3$' "$FAKE_HERDR_DIR/prompts.log"
@@ -155,25 +158,25 @@ restricted_path() {
 
 @test "report plan: plan ファイルがなければ失敗し、あれば plan 行を書く" {
   spawn_issue PROJ-4
-  run "$CSA" report PROJ-4 plan "要約"
+  run csa_run report PROJ-4 plan "要約"
   [ "$status" -eq 1 ]
   grep -q '^status: working$' "$CSA_HOME/tasks/PROJ-4.md"
   echo "# plan" >"$CSA_HOME/plans/PROJ-4.md"
-  "$CSA" report PROJ-4 plan "要約"
+  csa_run report PROJ-4 plan "要約"
   grep -q "^plan: $CSA_HOME/plans/PROJ-4.md$" "$CSA_HOME/tasks/PROJ-4.md"
   grep -q '^status: plan$' "$CSA_HOME/tasks/PROJ-4.md"
 }
 
 @test "approve: plan 状態のときだけ送り、2 回目は何も送らない" {
   spawn_issue PROJ-5
-  run "$CSA" approve PROJ-5
+  run csa_run approve PROJ-5
   [ "$status" -eq 1 ]
   echo "# plan" >"$CSA_HOME/plans/PROJ-5.md"
-  "$CSA" report PROJ-5 plan "要約"
-  "$CSA" approve PROJ-5 "人間: OK です"
+  csa_run report PROJ-5 plan "要約"
+  csa_run approve PROJ-5 "人間: OK です"
   grep -q '^status: working$' "$CSA_HOME/tasks/PROJ-5.md"
   grep -q 'approved: 人間: OK です' "$CSA_HOME/tasks/PROJ-5.md"
-  run "$CSA" approve PROJ-5
+  run csa_run approve PROJ-5
   [ "$status" -eq 1 ]
   [ "$(grep -c 'plan(.*)が承認されました' "$FAKE_HERDR_DIR/prompts.log")" -eq 1 ]
 }
@@ -181,8 +184,8 @@ restricted_path() {
 @test "approve: 送信を確認できなければ状態を plan のまま残す" {
   spawn_issue PROJ-6
   echo "# plan" >"$CSA_HOME/plans/PROJ-6.md"
-  "$CSA" report PROJ-6 plan "要約"
-  FAKE_HERDR_PROMPT_FAIL=1 run "$CSA" approve PROJ-6
+  csa_run report PROJ-6 plan "要約"
+  FAKE_HERDR_PROMPT_FAIL=1 run csa_run approve PROJ-6
   [ "$status" -eq 1 ]
   grep -q '^status: plan$' "$CSA_HOME/tasks/PROJ-6.md"
 }
@@ -190,21 +193,21 @@ restricted_path() {
 @test "status: 課題の一覧と、plan 状態の課題の plan のパスを表示する" {
   spawn_issue PROJ-7
   echo "# plan" >"$CSA_HOME/plans/PROJ-7.md"
-  "$CSA" report PROJ-7 plan "要約"
-  run "$CSA" status
+  csa_run report PROJ-7 plan "要約"
+  run csa_run status
   [ "$status" -eq 0 ]
   [[ "$output" == *"PROJ-7"*"w-proj-7"*"plan"*"idle"*"$CSA_HOME/plans/PROJ-7.md"* ]]
 }
 
 @test "doctor: 新しいバージョンがあれば知らせ、取得に失敗しても何も言わない" {
   command -v curl >/dev/null || skip "curl がない"
-  "$CSA" init >/dev/null 2>&1
+  csa_run init >/dev/null 2>&1
   local remote="$BATS_TEST_TMPDIR/remote-SKILL.md"
   sed 's/version: "[^"]*"/version: "99.0.0"/' "$REPO_ROOT/skills/csa/SKILL.md" >"$remote"
-  CSA_UPDATE_CHECK=1 CSA_UPDATE_URL="file://$remote" run "$CSA" doctor
+  CSA_UPDATE_CHECK=1 CSA_UPDATE_URL="file://$remote" run csa_run doctor
   [[ "$output" == *"新しいバージョン 99.0.0 があります"* ]]
   rm -f "$CSA_HOME/.update-check"
-  CSA_UPDATE_CHECK=1 CSA_UPDATE_URL="file://$BATS_TEST_TMPDIR/missing" run "$CSA" doctor
+  CSA_UPDATE_CHECK=1 CSA_UPDATE_URL="file://$BATS_TEST_TMPDIR/missing" run csa_run doctor
   [[ "$output" != *"新しいバージョン"* ]]
 }
 
