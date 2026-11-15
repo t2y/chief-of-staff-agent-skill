@@ -74,11 +74,12 @@ restricted_path() {
 
 @test "init: 別の場所を指す csa があれば上書きせずに失敗する" {
   mkdir -p "$CSA_BIN_DIR"
-  ln -s /bin/true "$CSA_BIN_DIR/csa"
+  touch "$BATS_TEST_TMPDIR/other-csa"
+  ln -s "$BATS_TEST_TMPDIR/other-csa" "$CSA_BIN_DIR/csa"
   run csa_run init
   [ "$status" -eq 1 ]
   [[ "$output" == *"すでに別の場所"* ]]
-  [ "$(readlink "$CSA_BIN_DIR/csa")" = /bin/true ]
+  [ "$(readlink "$CSA_BIN_DIR/csa")" = "$BATS_TEST_TMPDIR/other-csa" ]
 }
 
 @test "init: リンク切れの csa は張り直す" {
