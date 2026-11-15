@@ -41,7 +41,7 @@ restricted_path() {
 @test "init: 必須ツールが欠けていれば、すべて列挙して何も作らずに失敗する" {
   local rpath
   rpath=$(restricted_path jq git)
-  run env PATH="$rpath" bash csa_run init
+  run env PATH="$rpath" "${CSA_BASH:-bash}" "$CSA" init
   [ "$status" -eq 1 ]
   [[ "$output" == *"- jq"* ]]
   [[ "$output" == *"- git"* ]]
