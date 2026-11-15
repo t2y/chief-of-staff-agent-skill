@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      # bats は日本語のテスト名を扱うため新しい bash で動かし、csa 自体は macOS 標準の bash 3.2 で確かめる
+      - name: Prepare macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash
+          command -v jq || brew install jq
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          echo "CSA_BASH=/bin/bash" >> "$GITHUB_ENV"
+      - run: mise run lint
+      - run: mise run test

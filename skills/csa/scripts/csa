@@ -1,0 +1,431 @@
+#!/usr/bin/env bash
+# csa — Chief of Staff Agent helper for herdr.
+#   csa init                                       前提ツールを確かめ、csa を PATH に置き、CSA_HOME を用意する
+#   csa up                                         CSA エージェントを起動する(冪等)
+#   csa doctor                                     前提ツールと設定を確かめる(何も変更しない)
+#   csa version                                    バージョンと skill の場所を表示する
+#   csa spawn   <ISSUE> <repo-path> <brief-file|->  Worker を起動して brief を渡す(冪等)
+#   csa status                                     全タスクのファイル上の状態と herdr 上の状態
+#   csa report  <ISSUE> <status> <note>            Worker が呼ぶ。タスクファイルを更新し、CSA に知らせる
+#   csa approve <ISSUE> [note]                     人間が承認した plan の実装開始を Worker に伝える
+#   csa peek    <ISSUE> [lines]                    Worker の画面の直近を読む
+#   csa close   <ISSUE>                            Worker の tab を閉じる(worktree は残す)
+set -euo pipefail
+
+SELF=$(readlink -f "${BASH_SOURCE[0]}")
+SKILL_DIR=$(cd "$(dirname "$SELF")/.." && pwd)
+ASSETS="$SKILL_DIR/assets"
+WORKER_SKILL="$(dirname "$SKILL_DIR")/csa-worker/SKILL.md"
+
+# csa が動作を確かめた herdr のバージョン。herdr CLI の JSON の形に依存しているため
+HERDR_TESTED_VERSION="0.9.5"
+
+CSA_HOME="${CSA_HOME:-$HOME/.csa}"
+TASKS="$CSA_HOME/tasks"
+WSDIR="$CSA_HOME/ws"
+CSA_PLANS_DIR="${CSA_PLANS_DIR:-$CSA_HOME/plans}"
+CSA_BIN_DIR="${CSA_BIN_DIR:-$HOME/.local/bin}"
+CSA_KIND="${CSA_KIND:-claude}"
+WORKER_KIND="${CSA_WORKER_KIND:-claude}"
+CSA_PUSH="${CSA_PUSH:-1}"             # 0 にすると CSA への打ち込みをやめ、ファイル更新のみ
+STATUS_JQ="${CSA_STATUS_JQ:-.result.agent.agent_status}"
+CSA_UPDATE_CHECK="${CSA_UPDATE_CHECK:-1}"
+CSA_UPDATE_URL="${CSA_UPDATE_URL:-https://raw.githubusercontent.com/t2y/chief-of-staff-agent-skill/main/skills/csa/SKILL.md}"
+
+die() { echo "csa: $*" >&2; exit 1; }
+warn() { echo "csa: $*" >&2; }
+
+# SKILL.md の frontmatter から metadata.version を読む
+skill_version() {
+  awk '
+    NR == 1 && $0 != "---" { exit }
+    NR > 1 && $0 == "---" { exit }
+    /^[[:space:]]+version:/ { v = $2; gsub(/["'\'']/, "", v); print v; exit }
+  ' "$1"
+}
+
+# a が b より新しいバージョンなら真(数字をドットで区切った形だけを扱う)
+version_gt() {
+  awk -v a="$1" -v b="$2" 'BEGIN {
+    na = split(a, x, "."); nb = split(b, y, ".")
+    n = na > nb ? na : nb
+    for (i = 1; i <= n; i++) {
+      if ((x[i] + 0) > (y[i] + 0)) exit 0
+      if ((x[i] + 0) < (y[i] + 0)) exit 1
+    }
+    exit 1
+  }'
+}
+
+need_home() {
+  [[ -d "$TASKS" ]] || die "$CSA_HOME が初期化されていません。先に 'csa init' を実行してください"
+}
+
+agent_name() {
+  local n
+  n="w-$(tr 'A-Z_' 'a-z-' <<<"$1")"
+  [[ "$n" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || die "invalid agent name: $n"
+  echo "$n"
+}
+
+alive() { herdr agent get "$1" >/dev/null 2>&1; }
+
+field() { awk -v k="$1:" '$1==k{ $1=""; sub(/^ /,""); print; exit }' "$2"; }
+
+set_field() { # set_field key value file
+  local tmp; tmp=$(mktemp)
+  awk -v k="$1:" -v v="$2" '$1==k && !done { print k" "v; done=1; next } { print }' "$3" >"$tmp"
+  mv "$tmp" "$3"
+}
+
+log_task() { printf -- '- %s %s\n' "$(date '+%F %T')" "$2" >>"$1"; }
+
+# Claude Code の権限ルールで使うパス表記(~/ はホーム、// は絶対パス)
+# 権限ルールに書く文字列としての ~ なので展開しない
+# shellcheck disable=SC2088
+perm_path() {
+  case "$1" in
+    "$HOME"/*) echo "~/${1#"$HOME"/}" ;;
+    *) echo "/$1" ;;
+  esac
+}
+
+worker_allow_rules() {
+  local p; p=$(perm_path "$CSA_PLANS_DIR")
+  printf '%s\n' "Bash(csa report:*)" "Edit($p/**)" "Write($p/**)"
+}
+
+# 前提ツールの確認。必須が欠けていれば 1 を返す。警告と推奨は表示だけ
+check_tools() {
+  local missing=() t k kinds have_ver settings rule
+  for t in herdr jq git; do
+    command -v "$t" >/dev/null 2>&1 || missing+=("$t")
+  done
+  kinds=$(printf '%s\n' "$CSA_KIND" "$WORKER_KIND" | awk '!seen[$0]++')
+  while read -r k; do
+    command -v "$k" >/dev/null 2>&1 || missing+=("$k (CSA_KIND / CSA_WORKER_KIND で指定したエージェント)")
+  done <<<"$kinds"
+
+  if ((${#missing[@]} > 0)); then
+    echo "csa: 必要なツールが見つかりません。インストールしてから再実行してください:" >&2
+    printf '  - %s\n' "${missing[@]}" >&2
+    return 1
+  fi
+
+  have_ver=$(herdr --version 2>/dev/null | awk '{ print $2; exit }')
+  if [[ "$have_ver" != "$HERDR_TESTED_VERSION" ]]; then
+    warn "herdr ${have_ver:-(不明)} は未確認のバージョンです(確認済み: $HERDR_TESTED_VERSION)。動かない可能性があります"
+  fi
+
+  command -v curl >/dev/null 2>&1 || warn "curl がないため、新しいバージョンの確認を省きます"
+
+  if grep -qx claude <<<"$kinds"; then
+    settings="$HOME/.claude/settings.json"
+    local lacking=()
+    while read -r rule; do
+      if [[ ! -f "$settings" ]] || ! jq -e --arg r "$rule" '(.permissions.allow // []) | index($r) != null' "$settings" >/dev/null 2>&1; then
+        lacking+=("$rule")
+      fi
+    done < <(worker_allow_rules)
+    if ((${#lacking[@]} > 0)); then
+      warn "Claude Code の Worker が止まらないよう、$settings の permissions.allow に次を足すことを推奨します:"
+      printf '  "%s"\n' "${lacking[@]}" >&2
+    fi
+  fi
+  return 0
+}
+
+link_self() {
+  local target="$CSA_BIN_DIR/csa" cur
+  mkdir -p "$CSA_BIN_DIR"
+  # リンク切れ(skill の入れ直しで実体の場所が変わった場合など)は張り直す
+  if [[ -L "$target" && ! -e "$target" ]]; then
+    warn "$target はリンク切れ($(readlink "$target"))なので張り直します"
+    rm "$target"
+  fi
+  if [[ -L "$target" || -e "$target" ]]; then
+    cur=$(readlink -f "$target" 2>/dev/null || true)
+    if [[ "$cur" != "$SELF" ]]; then
+      die "$target はすでに別の場所(${cur:-不明})を指しています。確かめてから削除し、再実行してください"
+    fi
+  else
+    ln -s "$SELF" "$target"
+  fi
+  case ":$PATH:" in
+    *":$CSA_BIN_DIR:"*) ;;
+    *) warn "$CSA_BIN_DIR が PATH にありません。シェルの設定に追加してください" ;;
+  esac
+}
+
+sync_home() {
+  mkdir -p "$TASKS" "$WSDIR" "$CSA_PLANS_DIR" "$CSA_HOME/.claude"
+  cp "$ASSETS/AGENTS.md" "$CSA_HOME/AGENTS.md"
+  cp "$ASSETS/CLAUDE.md" "$CSA_HOME/CLAUDE.md"
+  cp "$ASSETS/claude-settings.json" "$CSA_HOME/.claude/settings.json"
+}
+
+# 新しいバージョンがあれば知らせる。失敗しても何も言わずに続ける
+update_notice() {
+  [[ "$CSA_UPDATE_CHECK" == 1 ]] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  local cache="$CSA_HOME/.update-check" now latest="" ts=0 local_ver
+  now=$(date +%s)
+  if [[ -f "$cache" ]]; then read -r ts latest <"$cache" || true; fi
+  if ((now - ts >= 86400)) || [[ -z "$latest" ]]; then
+    latest=$(curl -fsSL --max-time 3 "$CSA_UPDATE_URL" 2>/dev/null | skill_version /dev/stdin 2>/dev/null || true)
+    [[ -n "$latest" ]] || return 0
+    [[ -d "$CSA_HOME" ]] && echo "$now $latest" >"$cache"
+  fi
+  local_ver=$(skill_version "$SKILL_DIR/SKILL.md")
+  if version_gt "$latest" "$local_ver"; then
+    echo "csa: 新しいバージョン $latest があります(現在 $local_ver)。'npx skills update -g' で更新できます" >&2
+  fi
+  return 0
+}
+
+ensure_ws() { # repo → workspace_id(キャッシュ。stale なら呼び出し側で消して作り直す)
+  local repo="$1" key f id
+  key=$(basename "$repo"); f="$WSDIR/$key"
+  if [[ -s "$f" ]]; then cat "$f"; return; fi
+  id=$(herdr workspace create --cwd "$repo" --label "$key" --no-focus | jq -r '.result.workspace.workspace_id')
+  [[ -n "$id" && "$id" != null ]] || die "workspace create failed"
+  echo "$id" >"$f"; echo "$id"
+}
+
+ensure_worktree() { # repo issue → worktree path
+  local repo="$1" issue="$2" wt branch exclude
+  wt="$repo/.csa-worktrees/$issue"; branch="csa/$issue"
+  if [[ ! -d "$wt" ]]; then
+    if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then
+      git -C "$repo" worktree add "$wt" "$branch" >&2
+    else
+      git -C "$repo" worktree add -b "$branch" "$wt" >&2
+    fi
+  fi
+  exclude="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)/info/exclude"
+  grep -qxF '.csa-worktrees/' "$exclude" 2>/dev/null || echo '.csa-worktrees/' >>"$exclude"
+  echo "$wt"
+}
+
+cmd_init() {
+  check_tools || exit 1
+  link_self
+  sync_home
+  echo "csa $(skill_version "$SKILL_DIR/SKILL.md") を初期化しました"
+  echo "  コマンド: $CSA_BIN_DIR/csa -> $SELF"
+  echo "  CSA_HOME: $CSA_HOME"
+  echo "次は herdr に接続した状態で 'csa up' を実行してください"
+}
+
+cmd_up() {
+  check_tools || exit 1
+  sync_home
+  update_notice
+  if alive csa; then
+    echo "csa is already running"; return 0
+  fi
+  local pane
+  pane=$(herdr workspace create --cwd "$CSA_HOME" --label csa --focus | jq -r '.result.root_pane.pane_id')
+  [[ -n "$pane" && "$pane" != null ]] || die "workspace create failed"
+  herdr agent start csa --kind "$CSA_KIND" --pane "$pane" --timeout 60000 >/dev/null
+  echo "csa started in $pane — ふだんは csa ペインで話してください"
+}
+
+cmd_doctor() {
+  local ok=0 found
+  check_tools || ok=1
+  found=$(command -v csa 2>/dev/null || true)
+  if [[ -z "$found" ]]; then
+    warn "csa が PATH にありません。'csa init' を実行してください"; ok=1
+  elif [[ "$(readlink -f "$found")" != "$SELF" ]]; then
+    warn "PATH 上の csa($found)はこの skill のものではありません"; ok=1
+  fi
+  if [[ ! -f "$WORKER_SKILL" ]]; then
+    warn "csa-worker skill が見つかりません($WORKER_SKILL)。'npx skills add t2y/chief-of-staff-agent-skill -g --skill '*'' で入れてください"; ok=1
+  fi
+  [[ -d "$TASKS" ]] || { warn "$CSA_HOME が初期化されていません。'csa init' を実行してください"; ok=1; }
+  update_notice
+  ((ok == 0)) && echo "csa doctor: 問題は見つかりませんでした"
+  return "$ok"
+}
+
+cmd_version() {
+  echo "csa $(skill_version "$SKILL_DIR/SKILL.md")"
+  echo "skill:        $SKILL_DIR"
+  echo "worker skill: $(dirname "$WORKER_SKILL")"
+}
+
+cmd_spawn() {
+  [[ $# -eq 3 ]] || die "usage: csa spawn <ISSUE> <repo-path> <brief-file|->"
+  need_home
+  [[ -f "$WORKER_SKILL" ]] || die "csa-worker skill が見つかりません($WORKER_SKILL)"
+  local issue="$1" repo brief name task wt ws out pane tab plan
+  repo=$(cd "$2" && pwd)
+  name=$(agent_name "$issue"); task="$TASKS/$issue.md"; plan="$CSA_PLANS_DIR/$issue.md"
+  if [[ "$3" == "-" ]]; then brief=$(cat); else brief=$(cat "$3"); fi
+
+  # 冪等性: brief を送り済みの Worker が生きていれば何もしない(二重起動・二重プロンプト防止)
+  if alive "$name"; then
+    if [[ -f "$task" && "$(field prompted "$task")" == yes ]]; then
+      echo "already running: $name"; return 0
+    fi
+    # 起動はしたが brief をまだ送っていない(起動直後の確認で止まっていた)場合は、送るところから再開する
+    wt=$(field worktree "$task" 2>/dev/null || true)
+    [[ -n "$wt" ]] || die "$name は動いていますが、タスクファイルがありません。'csa peek $issue' で確かめてください"
+    if ! herdr agent wait "$name" --until idle --timeout 30000 >/dev/null 2>&1; then
+      warn "$name はまだ入力を受け付けられる状態ではありません。'csa peek $issue' で画面を確かめ、人間が承認してから再実行してください"
+      return 1
+    fi
+  else
+    wt=$(ensure_worktree "$repo" "$issue")
+    ws=$(ensure_ws "$repo")
+    if ! out=$(herdr tab create --workspace "$ws" --cwd "$wt" --label "$issue" --no-focus 2>/dev/null); then
+      rm -f "$WSDIR/$(basename "$repo")"          # stale な workspace_id を捨てて 1 回だけ再試行
+      ws=$(ensure_ws "$repo")
+      out=$(herdr tab create --workspace "$ws" --cwd "$wt" --label "$issue" --no-focus)
+    fi
+    pane=$(jq -r '.result.root_pane.pane_id' <<<"$out")
+    tab=$(jq -r '.result.tab.tab_id' <<<"$out")
+
+    # 起動に失敗しても記録が残るよう、起動より先にタスクファイルを書く
+    cat >"$task" <<EOF
+issue: $issue
+agent: $name
+repo: $repo
+worktree: $wt
+branch: csa/$issue
+tab: $tab
+plan: -
+prompted: no
+status: working
+---
+## brief
+$brief
+
+## log
+EOF
+    log_task "$task" "spawned"
+
+    if ! out=$(herdr agent start "$name" --kind "$WORKER_KIND" --pane "$pane" --timeout 60000 2>&1); then
+      set_field status blocked "$task"
+      log_task "$task" "blocked: 起動直後に止まった($(jq -r '.error.code // empty' <<<"$out" 2>/dev/null || true))"
+      warn "$name は起動直後の確認(フォルダの信頼など)で止まっている可能性があります。brief はまだ送っていません"
+      warn "'csa peek $issue' で画面を確かめ、人間が承認したら同じ 'csa spawn' を再実行してください(そのとき brief を送ります)"
+      return 1
+    fi
+  fi
+
+  local prompt
+  prompt="あなたは csa の Worker です。担当: $issue
+作業ディレクトリ: $wt(ブランチ csa/$issue)
+csa-worker skill に従って作業してください。skill として読み込めない場合は $WORKER_SKILL を読んでください。
+plan を書く場合の保存先: $plan
+
+## brief
+$brief"
+  # --until working: 着手したことだけ確認して戻る(完了までは待たない)
+  if ! herdr agent prompt "$name" "$prompt" --wait --until working --timeout 30000 >/dev/null; then
+    # 送れたかどうか分からないので、送り済みとして扱い、再送はしない
+    set_field prompted yes "$task"
+    warn "prompt 送信を確認できませんでした。再送せず 'csa peek $issue' で確認してください"
+    return 1
+  fi
+  set_field prompted yes "$task"
+  set_field status working "$task"
+  log_task "$task" "prompted"
+  echo "spawned: $name"
+}
+
+cmd_status() {
+  need_home
+  local f issue name st live plan
+  printf '%-16s %-18s %-10s %-12s %s\n' ISSUE AGENT FILE HERDR PLAN
+  for f in "$TASKS"/*.md; do
+    [[ -e "$f" ]] || { echo "(no tasks)"; return 0; }
+    issue=$(field issue "$f"); name=$(field agent "$f"); st=$(field status "$f")
+    if ! live=$(herdr agent get "$name" 2>/dev/null | jq -r "$STATUS_JQ"); then live="(not running)"; fi
+    plan=""
+    [[ "$st" == plan ]] && plan=$(field plan "$f")
+    printf '%-16s %-18s %-10s %-12s %s\n' "$issue" "$name" "$st" "$live" "$plan"
+  done
+}
+
+cmd_report() {
+  [[ $# -eq 3 ]] || die "usage: csa report <ISSUE> <working|blocked|plan|review|done> <note>"
+  need_home
+  local issue="$1" st="$2" note="$3" task="$TASKS/$1.md" plan
+  [[ -f "$task" ]] || die "no task: $issue"
+  case "$st" in working|blocked|plan|review|done) ;; *) die "bad status: $st" ;; esac
+  if [[ "$st" == plan ]]; then
+    plan="$CSA_PLANS_DIR/$issue.md"
+    [[ -f "$plan" ]] || die "plan ファイルがありません: $plan(書いてから報告してください)"
+    set_field plan "$plan" "$task"
+  fi
+  set_field status "$st" "$task"
+  log_task "$task" "$st: $note"
+  if [[ "$CSA_PUSH" == 1 && "$st" != working ]]; then
+    # 送れなくてもタスクファイルが正。CSA は 'csa status' で拾える
+    herdr agent prompt csa "[report] $issue $st: $note" >/dev/null 2>&1 \
+      || warn "CSA への push に失敗しました(ファイルには記録済み)"
+  fi
+}
+
+cmd_approve() {
+  [[ $# -ge 1 && $# -le 2 ]] || die "usage: csa approve <ISSUE> [note]"
+  need_home
+  local issue="$1" note="${2:-}" task="$TASKS/$1.md" st plan name msg
+  [[ -f "$task" ]] || die "no task: $issue"
+  st=$(field status "$task")
+  # 二重承認の防止: plan 状態のときだけ送る
+  [[ "$st" == plan ]] || die "$issue は plan 状態ではありません(現在: $st)。何も送りません"
+  plan=$(field plan "$task")
+  [[ -f "$plan" ]] || die "plan ファイルがありません: $plan"
+  name=$(field agent "$task")
+  msg="plan($plan)が承認されました。plan に沿って実装を始めてください。"
+  [[ -n "$note" ]] && msg="$msg
+補足: $note"
+  if ! herdr agent prompt "$name" "$msg" --wait --until working --timeout 30000 >/dev/null; then
+    warn "送信を確認できませんでした。状態は plan のままです。再送せず 'csa peek $issue' で確認してください"
+    return 1
+  fi
+  set_field status working "$task"
+  log_task "$task" "approved: ${note:-(no note)}"
+  echo "approved: $issue"
+}
+
+cmd_peek() {
+  [[ $# -ge 1 ]] || die "usage: csa peek <ISSUE> [lines]"
+  local name out
+  name=$(agent_name "$1")
+  out=$(herdr agent read "$name" --source recent-unwrapped --lines "${2:-60}")
+  # Codex のように代替スクリーンを使うエージェントはスクロールバックが空なので、見えている画面を読む
+  if [[ -z "${out//[[:space:]]/}" ]]; then
+    out=$(herdr agent read "$name" --source visible --lines "${2:-60}")
+  fi
+  printf '%s\n' "$out"
+}
+
+cmd_close() {
+  [[ $# -eq 1 ]] || die "usage: csa close <ISSUE>"
+  need_home
+  local task="$TASKS/$1.md" tab
+  [[ -f "$task" ]] || die "no task: $1"
+  tab=$(field tab "$task")
+  herdr tab close "$tab"
+  log_task "$task" "closed (worktree kept)"
+}
+
+sub="${1:-}"; shift || true
+case "$sub" in
+  init)    cmd_init ;;
+  up)      cmd_up ;;
+  doctor)  cmd_doctor ;;
+  version) cmd_version ;;
+  spawn)   cmd_spawn "$@" ;;
+  status)  cmd_status ;;
+  report)  cmd_report "$@" ;;
+  approve) cmd_approve "$@" ;;
+  peek)    cmd_peek "$@" ;;
+  close)   cmd_close "$@" ;;
+  *) sed -n '2,12p' "$SELF"; exit 2 ;;
+esac

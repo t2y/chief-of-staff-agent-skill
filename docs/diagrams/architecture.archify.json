@@ -1,0 +1,386 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "csa skill のアーキテクチャ",
+    "locale": "ja",
+    "output": "docs/diagrams/architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:t2y/chief-of-staff-agent-skill.git",
+      "provider": "github",
+      "link_mode": "local-only",
+      "revision": "116f81a99d50df62e63e78ab79e0cbc85053d964"
+    }
+  },
+  "components": [
+    {
+      "id": "human",
+      "type": "external",
+      "label": "人間",
+      "sublabel": "ふだんの窓口は CSA",
+      "pos": [
+        260,
+        40
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "skills/csa/assets/AGENTS.md",
+          "line": 1,
+          "end_line": 8,
+          "label": "CSA の役割"
+        }
+      ]
+    },
+    {
+      "id": "csa-agent",
+      "type": "backend",
+      "label": "CSA エージェント",
+      "sublabel": "Claude Code / Codex",
+      "tag": "cwd ~/.csa",
+      "pos": [
+        260,
+        220
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "skills/csa/assets/AGENTS.md",
+          "line": 10,
+          "end_line": 17,
+          "label": "守ること"
+        },
+        {
+          "path": "skills/csa/SKILL.md",
+          "line": 71,
+          "end_line": 83,
+          "label": "plan の承認"
+        }
+      ]
+    },
+    {
+      "id": "herdr",
+      "type": "messagebus",
+      "label": "herdr",
+      "sublabel": "workspace / tab / agent",
+      "pos": [
+        600,
+        220
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 282,
+          "end_line": 288,
+          "label": "tab create"
+        },
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 309,
+          "end_line": 309,
+          "label": "agent start"
+        },
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 366,
+          "end_line": 370,
+          "label": "[report] の通知"
+        }
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "Worker エージェント",
+      "sublabel": "w-<issue>",
+      "tag": "Claude Code / Codex",
+      "pos": [
+        940,
+        220
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "skills/csa-worker/SKILL.md",
+          "line": 17,
+          "end_line": 25,
+          "label": "守ること"
+        },
+        {
+          "path": "skills/csa-worker/SKILL.md",
+          "line": 29,
+          "end_line": 63,
+          "label": "見積もりと plan"
+        },
+        {
+          "path": "skills/csa-worker/SKILL.md",
+          "line": 65,
+          "end_line": 73,
+          "label": "実装と報告"
+        }
+      ]
+    },
+    {
+      "id": "worktree",
+      "type": "database",
+      "label": "worktree",
+      "sublabel": ".csa-worktrees/<ISSUE>",
+      "tag": "branch csa/<ISSUE>",
+      "pos": [
+        940,
+        40
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 195,
+          "end_line": 208,
+          "label": "ensure_worktree"
+        }
+      ]
+    },
+    {
+      "id": "csa-cli",
+      "type": "backend",
+      "label": "csa CLI",
+      "sublabel": "skills/csa/scripts/csa",
+      "tag": "~/.local/bin/csa",
+      "pos": [
+        600,
+        400
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 258,
+          "end_line": 337,
+          "label": "cmd_spawn"
+        },
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 353,
+          "end_line": 371,
+          "label": "cmd_report"
+        },
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 373,
+          "end_line": 394,
+          "label": "cmd_approve"
+        }
+      ]
+    },
+    {
+      "id": "tasks",
+      "type": "database",
+      "label": "タスク記録",
+      "sublabel": "~/.csa/tasks/<ISSUE>.md",
+      "pos": [
+        600,
+        570
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 290,
+          "end_line": 307,
+          "label": "spawn が作る"
+        },
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 359,
+          "end_line": 365,
+          "label": "report が更新"
+        }
+      ]
+    },
+    {
+      "id": "plans",
+      "type": "database",
+      "label": "plan",
+      "sublabel": "~/.csa/plans/<ISSUE>.md",
+      "pos": [
+        940,
+        570
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "skills/csa-worker/SKILL.md",
+          "line": 51,
+          "end_line": 63,
+          "label": "plan を書いて止まる"
+        },
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 359,
+          "end_line": 363,
+          "label": "plan の存在を確認"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "herdr セッション",
+      "wraps": [
+        "csa-agent",
+        "herdr",
+        "worker"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "CSA_HOME (~/.csa)",
+      "wraps": [
+        "tasks",
+        "plans"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "対象リポジトリ",
+      "wraps": [
+        "worktree"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "ask",
+      "from": "human",
+      "to": "csa-agent",
+      "label": "課題を依頼",
+      "variant": "emphasis"
+    },
+    {
+      "id": "escalate",
+      "from": "csa-agent",
+      "to": "human",
+      "label": "blocked / plan / review"
+    },
+    {
+      "id": "run-cli",
+      "from": "csa-agent",
+      "to": "csa-cli",
+      "label": "csa spawn / approve",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "id": "drive-herdr",
+      "from": "csa-cli",
+      "to": "herdr",
+      "label": "agent start / prompt",
+      "variant": "emphasis"
+    },
+    {
+      "id": "brief",
+      "from": "herdr",
+      "to": "worker",
+      "label": "brief を送る",
+      "variant": "emphasis"
+    },
+    {
+      "id": "notify",
+      "from": "herdr",
+      "to": "csa-agent",
+      "label": "[report] を通知",
+      "variant": "dashed"
+    },
+    {
+      "id": "implement",
+      "from": "worker",
+      "to": "worktree",
+      "label": "実装・コミット"
+    },
+    {
+      "id": "write-plan",
+      "from": "worker",
+      "to": "plans",
+      "label": "plan を書く（基準に当たるとき）"
+    },
+    {
+      "id": "report",
+      "from": "worker",
+      "to": "csa-cli",
+      "label": "csa report",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "record",
+      "from": "csa-cli",
+      "to": "tasks",
+      "label": "status / log を読み書き"
+    },
+    {
+      "id": "direct",
+      "from": "human",
+      "to": "worker",
+      "label": "直接やり取り（承認・回答）",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "violet",
+      "title": "配布",
+      "items": [
+        "npx skills add で csa と csa-worker の 2 つの skill を入れる",
+        "csa init が ~/.local/bin/csa と ~/.csa を用意する",
+        "herdr、jq、git は環境のものを使い、csa init が欠けを報告する"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "承認ゲート",
+      "items": [
+        "plan が要る課題では Worker が止まり、人間が承認したあとに CSA が csa approve を実行する",
+        "csa spawn、csa close、herdr agent prompt は自動では許可しない",
+        "起動直後のフォルダの信頼の確認は、人間が Worker のペインで承認する",
+        "人間は Worker のペインで直接やり取りでき、Worker は変わった状態を csa report で記録する"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "冪等性と記録",
+      "items": [
+        "spawn は brief を送り済みの Worker には何もしない",
+        "approve は plan 状態のときだけ送る",
+        "CSA への通知が届かなくても、タスク記録が正となり csa status で拾える"
+      ]
+    }
+  ]
+}

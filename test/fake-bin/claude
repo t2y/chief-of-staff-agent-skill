@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# テスト用の偽の claude。csa は存在だけを確かめる
+echo "claude (fake)"

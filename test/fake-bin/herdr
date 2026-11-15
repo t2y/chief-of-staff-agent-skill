@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# テスト用の偽の herdr。状態は FAKE_HERDR_DIR に置き、呼び出しを calls.log に残す
+set -euo pipefail
+d="${FAKE_HERDR_DIR:?}"
+mkdir -p "$d/agents"
+echo "$*" >>"$d/calls.log"
+
+next_id() { # next_id prefix → 連番の ID
+  local f="$d/seq-$1" n=0
+  [[ -f "$f" ]] && n=$(cat "$f")
+  n=$((n + 1)); echo "$n" >"$f"; echo "$1$n"
+}
+
+case "${1:-}" in
+  --version) echo "herdr ${FAKE_HERDR_VERSION:-0.9.5}" ;;
+  workspace)
+    ws=$(next_id w); tab=$(next_id t); pane=$(next_id p)
+    printf '{"result":{"type":"workspace_created","workspace":{"workspace_id":"%s"},"tab":{"tab_id":"%s"},"root_pane":{"pane_id":"%s"}}}\n' "$ws" "$tab" "$pane"
+    ;;
+  tab)
+    case "$2" in
+      create)
+        tab=$(next_id t); pane=$(next_id p)
+        printf '{"result":{"type":"tab_created","tab":{"tab_id":"%s"},"root_pane":{"pane_id":"%s"}}}\n' "$tab" "$pane"
+        ;;
+      close) ;;
+    esac
+    ;;
+  agent)
+    case "$2" in
+      start)
+        touch "$d/agents/$3"
+        # 起動直後の確認(フォルダの信頼など)で止まった状態を再現する
+        if [[ -f "$d/start-blocks" ]]; then
+          rm "$d/start-blocks"; touch "$d/blocked-$3"
+          echo '{"error":{"code":"agent_not_ready"}}'; exit 1
+        fi
+        ;;
+      wait) if [[ -f "$d/blocked-$3" ]]; then exit 1; fi ;;
+      get)
+        [[ -f "$d/agents/$3" ]] || { echo '{"error":{"code":"agent_not_found"}}'; exit 1; }
+        printf '{"result":{"type":"agent_info","agent":{"name":"%s","agent_status":"idle"}}}\n' "$3"
+        ;;
+      prompt)
+        [[ "${FAKE_HERDR_PROMPT_FAIL:-0}" == 1 ]] && exit 1
+        printf '=== %s\n%s\n' "$3" "$4" >>"$d/prompts.log"
+        ;;
+      read)
+        # FAKE_HERDR_ALT_SCREEN=1 のときは、代替スクリーンを使うエージェントのようにスクロールバックを空にする
+        if [[ "${FAKE_HERDR_ALT_SCREEN:-0}" == 1 && " $* " == *" recent-unwrapped "* ]]; then
+          echo ""
+        else
+          echo "(screen of $3: $*)"
+        fi
+        ;;
+    esac
+    ;;
+esac
