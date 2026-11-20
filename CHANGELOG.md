@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1
 
 - Worker と CSA の決まりを原則とし、人間の明示的な指示を優先するようにした。Worker は、人間か CSA が明示的に許可した行為（完了後の push など）を、許可された課題と範囲の中で行い、`csa report` に記録する。CSA は、人間が許可した例外だけを brief か追加の指示で Worker に伝える。
 
