@@ -4,7 +4,7 @@ description: csa（Chief of Staff Agent）から課題を割り当てられた W
 license: MIT
 compatibility: Linux または macOS 12.3 以降の bash、herdr、jq、git、PATH 上の csa コマンドが必要。
 metadata:
-  version: "0.1.0"
+  version: "0.1.1"
   author: t2y
 ---
 
