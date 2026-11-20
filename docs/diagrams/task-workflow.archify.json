@@ -10,7 +10,7 @@
       "url": "git@github.com:t2y/chief-of-staff-agent-skill.git",
       "provider": "github",
       "link_mode": "local-only",
-      "revision": "116f81a99d50df62e63e78ab79e0cbc85053d964"
+      "revision": "504f86a4b40a5f397f08572669cddf1aec23a5bd"
     }
   },
   "lanes": [
@@ -237,13 +237,19 @@
       "col": 5,
       "type": "external",
       "label": "確認してマージ",
-      "sublabel": "push は人間が行う",
+      "sublabel": "許可がなければ人間が push",
       "sources": [
         {
           "path": "skills/csa-worker/SKILL.md",
           "line": 17,
           "end_line": 25,
-          "label": "push はしない"
+          "label": "原則として push はしない"
+        },
+        {
+          "path": "skills/csa-worker/SKILL.md",
+          "line": 75,
+          "end_line": 86,
+          "label": "許可された push"
         }
       ]
     }
