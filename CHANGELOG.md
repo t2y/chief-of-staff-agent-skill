@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1
 
 - ドキュメントやソースコードを調べるだけの課題（ファイルの編集、コミット、push を伴わない課題）は、人間が言わなくても CSA が `csa spawn --no-eval` で起動するようにした。CSA は、brief に根拠と「直す作業が必要になったら blocked で止まる」ことを書く。
 - 調べる途中で直す作業が必要になったら、Worker は blocked で止まる。CSA は人間に範囲を広げるかを聞き、認められたら `csa eval on` で評価を有効にしてから Worker に直させる。

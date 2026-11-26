@@ -4,7 +4,7 @@ description: herdr 上で CSA（Chief of Staff Agent）として、人間から�
 license: MIT
 compatibility: Linux または macOS 12.3 以降の bash、herdr、jq、git が必要。
 metadata:
-  version: "0.2.0"
+  version: "0.2.1"
   author: t2y
 ---
 
