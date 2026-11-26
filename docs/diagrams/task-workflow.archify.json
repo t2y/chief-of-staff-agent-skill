@@ -2,7 +2,7 @@
   "schema_version": 2,
   "diagram_type": "workflow",
   "meta": {
-    "title": "csa の課題の流れと plan の承認",
+    "title": "csa の課題の流れ、plan の承認と evaluator の評価",
     "locale": "ja",
     "output": "docs/diagrams/task-workflow.html",
     "quality_profile": "showcase",
@@ -10,7 +10,7 @@
       "url": "git@github.com:t2y/chief-of-staff-agent-skill.git",
       "provider": "github",
       "link_mode": "local-only",
-      "revision": "504f86a4b40a5f397f08572669cddf1aec23a5bd"
+      "revision": "bbc24cf708dc43eaf1c13c1cb98ce700e8b23d5c"
     }
   },
   "lanes": [
@@ -23,6 +23,10 @@
       "label": "CSA"
     },
     {
+      "id": "evaluator",
+      "label": "evaluator"
+    },
+    {
       "id": "worker",
       "label": "Worker"
     }
@@ -30,26 +34,33 @@
   "phases": [
     {
       "id": "intake",
-      "label": "依頼と起動",
+      "label": "依頼と見積もり",
       "fromCol": 0,
-      "toCol": 1
-    },
-    {
-      "id": "estimate",
-      "label": "見積もり",
-      "fromCol": 2,
-      "toCol": 2
+      "toCol": 0
     },
     {
       "id": "approval",
       "label": "plan の承認",
+      "fromCol": 1,
+      "toCol": 2,
+      "variant": "security"
+    },
+    {
+      "id": "implement",
+      "label": "実装",
       "fromCol": 3,
+      "toCol": 3
+    },
+    {
+      "id": "evaluate",
+      "label": "評価",
+      "fromCol": 4,
       "toCol": 4,
       "variant": "security"
     },
     {
       "id": "deliver",
-      "label": "実装と報告",
+      "label": "review",
       "fromCol": 5,
       "toCol": 5,
       "variant": "emphasis"
@@ -64,6 +75,7 @@
     "approve-human",
     "approve-cli",
     "implement",
+    "evaluate",
     "relay-review",
     "check"
   ],
@@ -74,35 +86,41 @@
       "col": 0,
       "type": "external",
       "label": "課題を依頼",
-      "sublabel": "CSA のペインで話す",
+      "sublabel": "評価が不要なら明示する",
       "sources": [
         {
           "path": "skills/csa/SKILL.md",
-          "line": 36,
-          "end_line": 42,
+          "line": 42,
+          "end_line": 48,
           "label": "課題の受け方"
+        },
+        {
+          "path": "skills/csa/SKILL.md",
+          "line": 62,
+          "end_line": 73,
+          "label": "evaluator を挟むかどうか"
         }
       ]
     },
     {
       "id": "spawn",
       "lane": "csa",
-      "col": 1,
+      "col": 0,
       "type": "backend",
       "label": "csa spawn",
-      "sublabel": "brief を組み立てて渡す",
+      "sublabel": "不要と明示されたら --no-eval",
       "tag": "冪等",
       "sources": [
         {
           "path": "skills/csa/SKILL.md",
-          "line": 44,
-          "end_line": 54,
+          "line": 50,
+          "end_line": 60,
           "label": "brief の書き方"
         },
         {
           "path": "skills/csa/scripts/csa",
-          "line": 258,
-          "end_line": 337,
+          "line": 370,
+          "end_line": 466,
           "label": "cmd_spawn"
         }
       ]
@@ -110,15 +128,15 @@
     {
       "id": "estimate",
       "lane": "worker",
-      "col": 2,
+      "col": 0,
       "type": "backend",
       "label": "規模の見積もり",
       "sublabel": "4 つの基準で判定",
       "sources": [
         {
           "path": "skills/csa-worker/SKILL.md",
-          "line": 29,
-          "end_line": 39,
+          "line": 32,
+          "end_line": 43,
           "label": "見積もり"
         }
       ]
@@ -126,37 +144,37 @@
     {
       "id": "write-plan",
       "lane": "worker",
-      "col": 3,
+      "col": 1,
       "type": "backend",
       "label": "plan を書いて止まる",
       "sublabel": "csa report plan",
       "sources": [
         {
           "path": "skills/csa-worker/SKILL.md",
-          "line": 51,
-          "end_line": 63,
+          "line": 55,
+          "end_line": 68,
           "label": "plan が必要な場合"
         },
         {
           "path": "skills/csa/scripts/csa",
-          "line": 359,
-          "end_line": 365,
-          "label": "plan を記録"
+          "line": 672,
+          "end_line": 694,
+          "label": "cmd_report"
         }
       ]
     },
     {
       "id": "summarize",
       "lane": "csa",
-      "col": 3,
+      "col": 1,
       "type": "backend",
       "label": "plan を要約",
       "sublabel": "決めてほしい点を添える",
       "sources": [
         {
           "path": "skills/csa/SKILL.md",
-          "line": 71,
-          "end_line": 78,
+          "line": 103,
+          "end_line": 112,
           "label": "plan の承認"
         }
       ]
@@ -164,15 +182,15 @@
     {
       "id": "approve-human",
       "lane": "human",
-      "col": 4,
+      "col": 2,
       "type": "security",
       "label": "plan を承認",
       "sublabel": "課題を明示して返答",
       "sources": [
         {
           "path": "skills/csa/SKILL.md",
-          "line": 79,
-          "end_line": 83,
+          "line": 113,
+          "end_line": 115,
           "label": "承認とみなす条件"
         }
       ]
@@ -180,21 +198,21 @@
     {
       "id": "approve-cli",
       "lane": "csa",
-      "col": 4,
+      "col": 2,
       "type": "security",
       "label": "csa approve",
       "sublabel": "plan 状態のときだけ送る",
       "sources": [
         {
           "path": "skills/csa/scripts/csa",
-          "line": 373,
-          "end_line": 394,
+          "line": 696,
+          "end_line": 716,
           "label": "cmd_approve"
         },
         {
           "path": "skills/csa/assets/AGENTS.md",
           "line": 10,
-          "end_line": 17,
+          "end_line": 20,
           "label": "独断で承認しない"
         }
       ]
@@ -202,16 +220,95 @@
     {
       "id": "implement",
       "lane": "worker",
-      "col": 5,
+      "col": 3,
       "type": "backend",
       "label": "実装・テスト・コミット",
       "sublabel": "csa report review",
       "sources": [
         {
           "path": "skills/csa-worker/SKILL.md",
-          "line": 65,
-          "end_line": 73,
+          "line": 70,
+          "end_line": 81,
           "label": "実装と報告"
+        },
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 603,
+          "end_line": 617,
+          "label": "report_review"
+        }
+      ]
+    },
+    {
+      "id": "evaluate",
+      "lane": "evaluator",
+      "col": 4,
+      "type": "security",
+      "label": "成果物を評価",
+      "sublabel": "モジュール → 差分 → 検証方法",
+      "tag": "別の tab",
+      "sources": [
+        {
+          "path": "skills/csa/references/evaluator.md",
+          "line": 1,
+          "end_line": 123,
+          "label": "evaluator の手順"
+        },
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 539,
+          "end_line": 566,
+          "label": "eval_start"
+        },
+        {
+          "path": "skills/csa/assets/eval-criteria.md",
+          "line": 1,
+          "end_line": 43,
+          "label": "既定の基準"
+        }
+      ]
+    },
+    {
+      "id": "escalate",
+      "lane": "csa",
+      "col": 4,
+      "type": "backend",
+      "label": "要相談を伝える",
+      "sublabel": "どちらが正しいかは決めない",
+      "sources": [
+        {
+          "path": "skills/csa/SKILL.md",
+          "line": 117,
+          "end_line": 131,
+          "label": "評価のエスカレーション"
+        },
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 619,
+          "end_line": 670,
+          "label": "report_evaluated"
+        }
+      ]
+    },
+    {
+      "id": "decide",
+      "lane": "human",
+      "col": 4,
+      "type": "security",
+      "label": "判断する",
+      "sublabel": "(a)〜(d)、csa human add で記録",
+      "sources": [
+        {
+          "path": "skills/csa/SKILL.md",
+          "line": 75,
+          "end_line": 82,
+          "label": "人間の発言の記録"
+        },
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 728,
+          "end_line": 753,
+          "label": "cmd_human"
         }
       ]
     },
@@ -221,13 +318,13 @@
       "col": 5,
       "type": "backend",
       "label": "review を伝える",
-      "sublabel": "ブランチと確認方法",
+      "sublabel": "評価の結果と助言を添える",
       "sources": [
         {
           "path": "skills/csa/SKILL.md",
-          "line": 56,
-          "end_line": 69,
-          "label": "Worker からの報告"
+          "line": 84,
+          "end_line": 101,
+          "label": "Worker と evaluator からの報告"
         }
       ]
     },
@@ -237,18 +334,18 @@
       "col": 5,
       "type": "external",
       "label": "確認してマージ",
-      "sublabel": "許可がなければ人間が push",
+      "sublabel": "push は評価に合格してから",
       "sources": [
         {
           "path": "skills/csa-worker/SKILL.md",
-          "line": 17,
-          "end_line": 25,
+          "line": 18,
+          "end_line": 28,
           "label": "原則として push はしない"
         },
         {
           "path": "skills/csa-worker/SKILL.md",
-          "line": 75,
-          "end_line": 86,
+          "line": 116,
+          "end_line": 128,
           "label": "許可された push"
         }
       ]
@@ -259,14 +356,18 @@
       "id": "ask-spawn",
       "from": "ask",
       "to": "spawn",
-      "label": "課題"
+      "label": "課題",
+      "fromSide": "bottom",
+      "toSide": "top"
     },
     {
       "id": "spawn-estimate",
       "from": "spawn",
       "to": "estimate",
-      "label": "brief",
-      "variant": "emphasis"
+      "label": "brief と基準",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
     },
     {
       "id": "needs-plan",
@@ -321,24 +422,53 @@
       "variant": "emphasis"
     },
     {
-      "id": "report-review",
+      "id": "direct-approve",
+      "from": "approve-human",
+      "to": "implement",
+      "label": "ペインで直接承認",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "start-eval",
       "from": "implement",
+      "to": "evaluate",
+      "label": "review でコミットがあれば",
+      "variant": "security"
+    },
+    {
+      "id": "fail",
+      "from": "evaluate",
+      "to": "implement",
+      "label": "不合格（同じ話題で 3 回まで）",
+      "variant": "dashed",
+      "role": "return"
+    },
+    {
+      "id": "to-escalate",
+      "from": "evaluate",
+      "to": "escalate",
+      "label": "要相談・上限",
+      "variant": "security"
+    },
+    {
+      "id": "ask-decide",
+      "from": "escalate",
+      "to": "decide",
+      "label": "論点と両方の立場"
+    },
+    {
+      "id": "pass",
+      "from": "evaluate",
       "to": "relay-review",
-      "label": "[report] review"
+      "label": "合格・棄権",
+      "variant": "emphasis"
     },
     {
       "id": "hand-back",
       "from": "relay-review",
       "to": "check",
       "label": "確認方法"
-    },
-    {
-      "id": "direct-approve",
-      "from": "approve-human",
-      "to": "implement",
-      "label": "Worker のペインで直接承認",
-      "variant": "dashed",
-      "role": "branch"
     }
   ],
   "cards": [
@@ -354,12 +484,22 @@
     },
     {
       "dot": "rose",
-      "title": "承認の扱い",
+      "title": "承認と人間の判断の扱い",
       "items": [
-        "承認は常に人間が行い、CSA は承認した発言を note に引用して残す",
-        "修正を求められたら、CSA が Worker に伝え、Worker は plan を直してもう一度報告する",
-        "plan 不要と判定した課題も、判定と理由をタスク記録に残してから実装する",
-        "人間が Worker のペインで直接承認した場合は、Worker がその旨を csa report working で記録してから実装する"
+        "承認は常に人間が行い、CSA は承認した発言を引用して残す",
+        "人間が Worker のペインで直接承認した場合は、Worker が csa human approve で記録してから実装する",
+        "エスカレーションへの回答など、要件や方針を変える発言は、聞いた側が csa human add で記録する",
+        "evaluator は csa human list で人間の発言を読み、要件の変更として扱う"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "evaluator の評価",
+      "items": [
+        "Worker とは別の agent が別の tab で起動し、Worker の会話を引き継がない",
+        "変更されたモジュールを差分より先に調べ、統合性の指摘は原則として助言にする",
+        "人間が不要と明示した課題（--no-eval、csa eval off）とコミットのない課題は評価しない",
+        "Worker は、push を許可された課題でも、評価に合格するまで push しない"
       ]
     }
   ]

@@ -30,17 +30,17 @@ workspace: csa                     workspace: <repo>(リポジトリごとに自
 
 ### アーキテクチャ
 
-人間、CSA、herdr、Worker、csa CLI と、タスク記録、plan、worktree の関係です。
+人間、CSA、herdr、Worker、evaluator、csa CLI と、タスク記録、plan、評価の基準と結果、worktree の関係です。
 
 ![csa skill のアーキテクチャ](docs/diagrams/architecture.png)
 
 HTML 版: [docs/diagrams/architecture.html](docs/diagrams/architecture.html)
 
-### 課題の流れと plan の承認
+### 課題の流れ、plan の承認と evaluator の評価
 
-Worker が見積もりで plan の要否を判定し、plan が要る課題では人間の承認を待ってから実装する流れです。
+Worker が見積もりで plan の要否を判定し、plan が要る課題では人間の承認を待ってから実装し、evaluator の評価を経て review として人間に届く流れです。
 
-![csa の課題の流れと plan の承認](docs/diagrams/task-workflow.png)
+![csa の課題の流れ、plan の承認と evaluator の評価](docs/diagrams/task-workflow.png)
 
 HTML 版: [docs/diagrams/task-workflow.html](docs/diagrams/task-workflow.html)
 
