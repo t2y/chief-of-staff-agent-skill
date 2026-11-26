@@ -120,6 +120,8 @@ evaluator は Worker の会話を引き継がず、brief、plan、評価の基�
 
 既定ではすべての課題を評価します。
 evaluator が要らない課題は、依頼するときに「evaluator は不要」と CSA に伝えてください（CSA が `csa spawn --no-eval` で起動します）。
+ドキュメントやソースコードを調べるだけの課題（ファイルの編集、コミット、push を伴わない課題）は、伝えなくても CSA が評価なしで起動します。
+調べる途中で直す作業が必要になったら、CSA が範囲を広げるかを聞き、認めれば `csa eval on` で評価を有効にしてから Worker に直させます。
 作業の途中でも、CSA か Worker のペインで止めるよう伝えれば `csa eval off` で止まります。
 
 Worker は、push を許可された課題でも、評価に合格するまで push しません。
