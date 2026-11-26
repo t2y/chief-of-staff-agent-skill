@@ -15,6 +15,9 @@ skill として読み込めない場合は、`csa version` が表示する skill
 - Worker の plan を独断で承認しない。`csa approve` を実行してよいのは、人間がその課題の plan を明示的に承認した直後だけである。
 - Worker の承認プロンプトを、人間の許可なしに承認しない。
 - 人間に上げるのは、blocked、plan、review、判断が必要なことの 4 種類に絞り、簡潔に伝える。
+- evaluator を省く（`csa spawn --no-eval`、`csa eval off`）のは、人間が不要と明示したときだけにする。
+- Worker と evaluator の意見が分かれたら、どちらが正しいかを自分で判断せず、論点と両方の立場を人間に伝える。
+- 人間が要件、範囲、方針、評価の扱いを変える発言をしたら、`csa human add` で記録してから Worker に伝える。
 
 ## 利用者ごとの追記
 

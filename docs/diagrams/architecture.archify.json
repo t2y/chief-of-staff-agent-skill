@@ -10,7 +10,7 @@
       "url": "git@github.com:t2y/chief-of-staff-agent-skill.git",
       "provider": "github",
       "link_mode": "local-only",
-      "revision": "504f86a4b40a5f397f08572669cddf1aec23a5bd"
+      "revision": "bbc24cf708dc43eaf1c13c1cb98ce700e8b23d5c"
     }
   },
   "components": [
@@ -54,14 +54,20 @@
         {
           "path": "skills/csa/assets/AGENTS.md",
           "line": 10,
-          "end_line": 17,
+          "end_line": 20,
           "label": "守ること"
         },
         {
           "path": "skills/csa/SKILL.md",
-          "line": 71,
-          "end_line": 83,
+          "line": 103,
+          "end_line": 115,
           "label": "plan の承認"
+        },
+        {
+          "path": "skills/csa/SKILL.md",
+          "line": 117,
+          "end_line": 131,
+          "label": "評価のエスカレーション"
         }
       ]
     },
@@ -81,20 +87,20 @@
       "sources": [
         {
           "path": "skills/csa/scripts/csa",
-          "line": 282,
-          "end_line": 288,
+          "line": 237,
+          "end_line": 246,
           "label": "tab create"
         },
         {
           "path": "skills/csa/scripts/csa",
-          "line": 309,
-          "end_line": 309,
+          "line": 430,
+          "end_line": 430,
           "label": "agent start"
         },
         {
           "path": "skills/csa/scripts/csa",
-          "line": 366,
-          "end_line": 370,
+          "line": 109,
+          "end_line": 113,
           "label": "[report] の通知"
         }
       ]
@@ -116,21 +122,21 @@
       "sources": [
         {
           "path": "skills/csa-worker/SKILL.md",
-          "line": 17,
-          "end_line": 25,
+          "line": 18,
+          "end_line": 28,
           "label": "守ること"
         },
         {
           "path": "skills/csa-worker/SKILL.md",
-          "line": 29,
-          "end_line": 63,
+          "line": 32,
+          "end_line": 68,
           "label": "見積もりと plan"
         },
         {
           "path": "skills/csa-worker/SKILL.md",
-          "line": 65,
-          "end_line": 73,
-          "label": "実装と報告"
+          "line": 70,
+          "end_line": 98,
+          "label": "実装、報告、評価の受け方"
         }
       ]
     },
@@ -151,8 +157,8 @@
       "sources": [
         {
           "path": "skills/csa/scripts/csa",
-          "line": 195,
-          "end_line": 208,
+          "line": 248,
+          "end_line": 261,
           "label": "ensure_worktree"
         }
       ]
@@ -174,21 +180,21 @@
       "sources": [
         {
           "path": "skills/csa/scripts/csa",
-          "line": 258,
-          "end_line": 337,
+          "line": 370,
+          "end_line": 466,
           "label": "cmd_spawn"
         },
         {
           "path": "skills/csa/scripts/csa",
-          "line": 353,
-          "end_line": 371,
+          "line": 672,
+          "end_line": 694,
           "label": "cmd_report"
         },
         {
           "path": "skills/csa/scripts/csa",
-          "line": 373,
-          "end_line": 394,
-          "label": "cmd_approve"
+          "line": 728,
+          "end_line": 792,
+          "label": "cmd_human、cmd_eval"
         }
       ]
     },
@@ -208,14 +214,14 @@
       "sources": [
         {
           "path": "skills/csa/scripts/csa",
-          "line": 290,
-          "end_line": 307,
+          "line": 404,
+          "end_line": 427,
           "label": "spawn が作る"
         },
         {
           "path": "skills/csa/scripts/csa",
-          "line": 359,
-          "end_line": 365,
+          "line": 672,
+          "end_line": 694,
           "label": "report が更新"
         }
       ]
@@ -236,15 +242,79 @@
       "sources": [
         {
           "path": "skills/csa-worker/SKILL.md",
-          "line": 51,
-          "end_line": 63,
+          "line": 55,
+          "end_line": 68,
           "label": "plan を書いて止まる"
         },
         {
           "path": "skills/csa/scripts/csa",
-          "line": 359,
-          "end_line": 363,
+          "line": 680,
+          "end_line": 680,
           "label": "plan の存在を確認"
+        }
+      ]
+    },
+    {
+      "id": "evaluator",
+      "type": "security",
+      "label": "evaluator エージェント",
+      "sublabel": "e-<issue>（別の tab）",
+      "tag": "評価のたびに起動",
+      "pos": [
+        1280,
+        220
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "skills/csa/references/evaluator.md",
+          "line": 1,
+          "end_line": 123,
+          "label": "evaluator の手順"
+        },
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 507,
+          "end_line": 566,
+          "label": "eval_prompt、eval_start"
+        },
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 619,
+          "end_line": 670,
+          "label": "report_evaluated"
+        }
+      ]
+    },
+    {
+      "id": "eval-store",
+      "type": "database",
+      "label": "評価の基準と結果",
+      "sublabel": "~/.csa/eval/",
+      "tag": "criteria / context / results",
+      "pos": [
+        1280,
+        570
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "skills/csa/scripts/csa",
+          "line": 199,
+          "end_line": 206,
+          "label": "sync_home"
+        },
+        {
+          "path": "skills/csa/assets/eval-criteria.md",
+          "line": 1,
+          "end_line": 43,
+          "label": "既定の基準"
         }
       ]
     }
@@ -256,7 +326,8 @@
       "wraps": [
         "csa-agent",
         "herdr",
-        "worker"
+        "worker",
+        "evaluator"
       ]
     },
     {
@@ -264,7 +335,8 @@
       "label": "CSA_HOME (~/.csa)",
       "wraps": [
         "tasks",
-        "plans"
+        "plans",
+        "eval-store"
       ]
     },
     {
@@ -293,7 +365,7 @@
       "id": "run-cli",
       "from": "csa-agent",
       "to": "csa-cli",
-      "label": "csa spawn / approve",
+      "label": "csa spawn / approve / human / eval",
       "variant": "emphasis",
       "fromSide": "bottom",
       "toSide": "left"
@@ -335,7 +407,7 @@
       "id": "report",
       "from": "worker",
       "to": "csa-cli",
-      "label": "csa report",
+      "label": "csa report / human",
       "fromSide": "left",
       "toSide": "right"
     },
@@ -350,6 +422,32 @@
       "from": "human",
       "to": "worker",
       "label": "直接やり取り（承認・回答）",
+      "variant": "dashed"
+    },
+    {
+      "id": "start-eval",
+      "from": "herdr",
+      "to": "evaluator",
+      "label": "review の後に起動",
+      "variant": "emphasis"
+    },
+    {
+      "id": "verify",
+      "from": "evaluator",
+      "to": "worktree",
+      "label": "差分を読み、検証を実行"
+    },
+    {
+      "id": "eval-files",
+      "from": "evaluator",
+      "to": "eval-store",
+      "label": "基準を読み、結果を書く"
+    },
+    {
+      "id": "evaluated",
+      "from": "evaluator",
+      "to": "csa-cli",
+      "label": "csa report evaluated",
       "variant": "dashed"
     }
   ],
@@ -370,7 +468,7 @@
         "plan が要る課題では Worker が止まり、人間が承認したあとに CSA が csa approve を実行する",
         "csa spawn、csa close、herdr agent prompt は自動では許可しない",
         "起動直後のフォルダの信頼の確認は、人間が Worker のペインで承認する",
-        "人間は Worker のペインで直接やり取りでき、Worker は変わった状態を csa report で記録する"
+        "人間は Worker のペインで直接やり取りでき、要件や方針を変える発言は csa human add で記録する"
       ]
     },
     {
@@ -380,6 +478,16 @@
         "spawn は brief を送り済みの Worker には何もしない",
         "approve は plan 状態のときだけ送る",
         "CSA への通知が届かなくても、タスク記録が正となり csa status で拾える"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "evaluator",
+      "items": [
+        "Worker とは別の agent で、Worker の会話を引き継がず、brief、plan、基準、人間の発言、差分だけを読む",
+        "不合格は Worker に差し戻し、要相談と同じ話題で 3 回の不合格は人間に上げる",
+        "人間が不要と明示した課題とコミットのない課題は評価しない",
+        "context/ は evaluator だけが読み、Worker には渡さない"
       ]
     }
   ]

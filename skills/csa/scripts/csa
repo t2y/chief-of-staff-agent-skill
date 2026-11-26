@@ -4,25 +4,32 @@
 #   csa up                                         CSA エージェントを起動する(冪等)
 #   csa doctor                                     前提ツールと設定を確かめる(何も変更しない)
 #   csa version                                    バージョンと skill の場所を表示する
-#   csa spawn   <ISSUE> <repo-path> <brief-file|->  Worker を起動して brief を渡す(冪等)
+#   csa spawn   [--no-eval] <ISSUE> <repo-path> <brief-file|->  Worker を起動して brief を渡す(冪等)
 #   csa status                                     全タスクのファイル上の状態と herdr 上の状態
-#   csa report  <ISSUE> <status> <note>            Worker が呼ぶ。タスクファイルを更新し、CSA に知らせる
+#   csa report  <ISSUE> <status> <note>            Worker と evaluator が呼ぶ。タスクファイルを更新し、CSA に知らせる
 #   csa approve <ISSUE> [note]                     人間が承認した plan の実装開始を Worker に伝える
-#   csa peek    <ISSUE> [lines]                    Worker の画面の直近を読む
-#   csa close   <ISSUE>                            Worker の tab を閉じる(worktree は残す)
+#   csa human   add|approve|list <ISSUE> ...       人間の発言を記録する、読む
+#   csa eval    on|off <ISSUE> ...                 課題の評価を有効にする、止める
+#   csa peek    <ISSUE> [lines] [--eval]           Worker(--eval なら evaluator)の画面の直近を読む
+#   csa close   <ISSUE>                            Worker と evaluator の tab を閉じる(worktree は残す)
 set -euo pipefail
 
 SELF=$(readlink -f "${BASH_SOURCE[0]}")
 SKILL_DIR=$(cd "$(dirname "$SELF")/.." && pwd)
 ASSETS="$SKILL_DIR/assets"
+EVALUATOR_DOC="$SKILL_DIR/references/evaluator.md"
 WORKER_SKILL="$(dirname "$SKILL_DIR")/csa-worker/SKILL.md"
 
 # csa が動作を確かめた herdr のバージョン。herdr CLI の JSON の形に依存しているため
 HERDR_TESTED_VERSION="0.9.5"
 
+# 同じ話題で実装の後の評価を行う回数の上限
+EVAL_MAX_ROUNDS=3
+
 CSA_HOME="${CSA_HOME:-$HOME/.csa}"
 TASKS="$CSA_HOME/tasks"
 WSDIR="$CSA_HOME/ws"
+EVAL_DIR="$CSA_HOME/eval"
 CSA_PLANS_DIR="${CSA_PLANS_DIR:-$CSA_HOME/plans}"
 CSA_BIN_DIR="${CSA_BIN_DIR:-$HOME/.local/bin}"
 CSA_KIND="${CSA_KIND:-claude}"
@@ -61,24 +68,55 @@ need_home() {
   [[ -d "$TASKS" ]] || die "$CSA_HOME が初期化されていません。先に 'csa init' を実行してください"
 }
 
-agent_name() {
+need_task() { # need_task issue → タスクファイルのパス
+  need_home
+  [[ -f "$TASKS/$1.md" ]] || die "no task: $1"
+  echo "$TASKS/$1.md"
+}
+
+agent_name() { # agent_name issue [prefix] → herdr の agent 名(Worker は w-、evaluator は e-)
   local n
-  n="w-$(tr 'A-Z_' 'a-z-' <<<"$1")"
+  n="${2:-w}-$(tr 'A-Z_' 'a-z-' <<<"$1")"
   [[ "$n" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || die "invalid agent name: $n"
   echo "$n"
 }
 
 alive() { herdr agent get "$1" >/dev/null 2>&1; }
 
-field() { awk -v k="$1:" '$1==k{ $1=""; sub(/^ /,""); print; exit }' "$2"; }
+# タスクファイルの先頭(--- より前)の key: value を読む
+field() { awk -v k="$1:" '$0 == "---" { exit } $1==k{ $1=""; sub(/^ /,""); print; exit }' "$2"; }
 
-set_field() { # set_field key value file
+# field の値。行がないか空なら既定値を返す
+field_or() { local v; v=$(field "$1" "$3"); echo "${v:-$2}"; }
+
+set_field() { # set_field key value file(行がなければ --- の直前に足す)
   local tmp; tmp=$(mktemp)
-  awk -v k="$1:" -v v="$2" '$1==k && !done { print k" "v; done=1; next } { print }' "$3" >"$tmp"
+  # 値は ENVIRON で渡す(awk -v はバックスラッシュを解釈してしまう)
+  K="$1:" V="$2" awk '
+    BEGIN { k = ENVIRON["K"]; v = ENVIRON["V"] }
+    !head_done && $1 == k && !done { print k " " v; done = 1; next }
+    !head_done && $0 == "---" { if (!done) { print k " " v; done = 1 }; head_done = 1 }
+    { print }
+  ' "$3" >"$tmp"
   mv "$tmp" "$3"
 }
 
-log_task() { printf -- '- %s %s\n' "$(date '+%F %T')" "$2" >>"$1"; }
+one_line() { tr '\n' ' ' <<<"$1" | sed 's/[[:space:]]*$//'; }
+
+log_task() { printf -- '- %s %s\n' "$(date '+%F %T')" "$(one_line "$2")" >>"$1"; }
+
+# CSA のペインに知らせる。送れなくてもタスクファイルが正。CSA は 'csa status' で拾える
+push_csa() {
+  [[ "$CSA_PUSH" == 1 ]] || return 0
+  herdr agent prompt csa "$1" >/dev/null 2>&1 \
+    || warn "CSA への push に失敗しました(ファイルには記録済み)"
+}
+
+# Worker か evaluator に知らせる(完了は待たない)
+tell_agent() {
+  herdr agent prompt "$1" "$2" >/dev/null 2>&1 \
+    || warn "$1 への送信に失敗しました。'csa peek' で確かめてください"
+}
 
 # Claude Code の権限ルールで使うパス表記(~/ はホーム、// は絶対パス)
 # 権限ルールに書く文字列としての ~ なので展開しない
@@ -91,8 +129,9 @@ perm_path() {
 }
 
 worker_allow_rules() {
-  local p; p=$(perm_path "$CSA_PLANS_DIR")
-  printf '%s\n' "Bash(csa report:*)" "Edit($p/**)" "Write($p/**)"
+  local p r
+  p=$(perm_path "$CSA_PLANS_DIR"); r=$(perm_path "$EVAL_DIR/results")
+  printf '%s\n' "Bash(csa report:*)" "Bash(csa human:*)" "Edit($p/**)" "Write($p/**)" "Edit($r/**)" "Write($r/**)"
 }
 
 # 前提ツールの確認。必須が欠けていれば 1 を返す。警告と推奨は表示だけ
@@ -128,7 +167,7 @@ check_tools() {
       fi
     done < <(worker_allow_rules)
     if ((${#lacking[@]} > 0)); then
-      warn "Claude Code の Worker が止まらないよう、$settings の permissions.allow に次を足すことを推奨します:"
+      warn "Claude Code の Worker と evaluator が止まらないよう、$settings の permissions.allow に次を足すことを推奨します:"
       printf '  "%s"\n' "${lacking[@]}" >&2
     fi
   fi
@@ -158,10 +197,12 @@ link_self() {
 }
 
 sync_home() {
-  mkdir -p "$TASKS" "$WSDIR" "$CSA_PLANS_DIR" "$CSA_HOME/.claude"
+  mkdir -p "$TASKS" "$WSDIR" "$CSA_PLANS_DIR" "$CSA_HOME/.claude" \
+    "$EVAL_DIR/criteria/repos" "$EVAL_DIR/context" "$EVAL_DIR/results"
   cp "$ASSETS/AGENTS.md" "$CSA_HOME/AGENTS.md"
   cp "$ASSETS/CLAUDE.md" "$CSA_HOME/CLAUDE.md"
   cp "$ASSETS/claude-settings.json" "$CSA_HOME/.claude/settings.json"
+  cp "$ASSETS/eval-criteria.md" "$EVAL_DIR/criteria/default.md"
 }
 
 # 新しいバージョンがあれば知らせる。失敗しても何も言わずに続ける
@@ -192,6 +233,18 @@ ensure_ws() { # repo → workspace_id(キャッシュ。stale なら呼び出し
   echo "$id" >"$f"; echo "$id"
 }
 
+# repo cwd label → tab create の JSON(stale な workspace_id なら 1 回だけ作り直す)
+create_tab() {
+  local repo="$1" cwd="$2" label="$3" ws out
+  ws=$(ensure_ws "$repo")
+  if ! out=$(herdr tab create --workspace "$ws" --cwd "$cwd" --label "$label" --no-focus 2>/dev/null); then
+    rm -f "$WSDIR/$(basename "$repo")"
+    ws=$(ensure_ws "$repo")
+    out=$(herdr tab create --workspace "$ws" --cwd "$cwd" --label "$label" --no-focus)
+  fi
+  echo "$out"
+}
+
 ensure_worktree() { # repo issue → worktree path
   local repo="$1" issue="$2" wt branch exclude
   wt="$repo/.csa-worktrees/$issue"; branch="csa/$issue"
@@ -205,6 +258,65 @@ ensure_worktree() { # repo issue → worktree path
   exclude="$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)/info/exclude"
   grep -qxF '.csa-worktrees/' "$exclude" 2>/dev/null || echo '.csa-worktrees/' >>"$exclude"
   echo "$wt"
+}
+
+# 既定のブランチとの merge-base(求められなければ HEAD)
+merge_base() {
+  local dir="$1" def b
+  def=$(git -C "$dir" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+  if [[ -z "$def" ]]; then
+    for b in main master; do
+      git -C "$dir" show-ref --verify --quiet "refs/heads/$b" && { def=$b; break; }
+    done
+  fi
+  if [[ -n "$def" ]] && b=$(git -C "$dir" merge-base HEAD "$def" 2>/dev/null); then
+    echo "$b"
+  else
+    git -C "$dir" rev-parse HEAD
+  fi
+}
+
+# 差分の起点。タスクファイルになければ merge-base で代える
+task_base() {
+  local b; b=$(field_or base - "$1")
+  if [[ "$b" == - ]]; then merge_base "$(field worktree "$1")"; else echo "$b"; fi
+}
+
+# remote のパス(ホスト名と .git を除いた部分)
+remote_path() {
+  git -C "$1" remote get-url origin 2>/dev/null | sed -E 's#^[a-z+]+://[^/]+/##; s#^[^@/]+@[^:]+:##; s#\.git$##'
+}
+
+# 評価の基準のうち存在するファイル
+criteria_files() {
+  local repo="$1" f
+  for f in "$EVAL_DIR/criteria/default.md" "$EVAL_DIR/criteria/local.md" "$EVAL_DIR/criteria/repos/$(basename "$repo").md"; do
+    [[ -f "$f" ]] && echo "$f"
+  done
+  return 0
+}
+
+# evaluator だけが読む文脈のうち、先頭の match: が remote のパスに前方一致するファイル
+context_files() {
+  local path f m
+  path=$(remote_path "$1")
+  [[ -n "$path" ]] || return 0
+  for f in "$EVAL_DIR/context"/*.md; do
+    [[ -f "$f" ]] || continue
+    m=$(awk '/^match:/ { sub(/^match:[[:space:]]*/, ""); print; exit }' "$f")
+    [[ -n "$m" && "$path" == "$m"* ]] && echo "$f"
+  done
+  return 0
+}
+
+# タスクファイルの brief の節(## brief から最後の ## log の前まで)
+task_brief() {
+  awk '
+    { line[NR] = $0 }
+    $0 == "## brief" && !start { start = NR }
+    $0 == "## log" { stop = NR }
+    END { for (i = start + 1; i < stop; i++) print line[i] }
+  ' "$1"
 }
 
 cmd_init() {
@@ -256,10 +368,12 @@ cmd_version() {
 }
 
 cmd_spawn() {
-  [[ $# -eq 3 ]] || die "usage: csa spawn <ISSUE> <repo-path> <brief-file|->"
+  local eval_mode=on
+  if [[ "${1:-}" == --no-eval ]]; then eval_mode=off; shift; fi
+  [[ $# -eq 3 ]] || die "usage: csa spawn [--no-eval] <ISSUE> <repo-path> <brief-file|->"
   need_home
   [[ -f "$WORKER_SKILL" ]] || die "csa-worker skill が見つかりません($WORKER_SKILL)"
-  local issue="$1" repo brief name task wt ws out pane tab plan
+  local issue="$1" repo brief name task wt out pane tab plan base existed=0
   repo=$(cd "$2" && pwd)
   name=$(agent_name "$issue"); task="$TASKS/$issue.md"; plan="$CSA_PLANS_DIR/$issue.md"
   if [[ "$3" == "-" ]]; then brief=$(cat); else brief=$(cat "$3"); fi
@@ -272,18 +386,17 @@ cmd_spawn() {
     # 起動はしたが brief をまだ送っていない(起動直後の確認で止まっていた)場合は、送るところから再開する
     wt=$(field worktree "$task" 2>/dev/null || true)
     [[ -n "$wt" ]] || die "$name は動いていますが、タスクファイルがありません。'csa peek $issue' で確かめてください"
+    eval_mode=$(field_or eval on "$task")
     if ! herdr agent wait "$name" --until idle --timeout 30000 >/dev/null 2>&1; then
       warn "$name はまだ入力を受け付けられる状態ではありません。'csa peek $issue' で画面を確かめ、人間が承認してから再実行してください"
       return 1
     fi
   else
+    git -C "$repo" show-ref --verify --quiet "refs/heads/csa/$issue" && existed=1
     wt=$(ensure_worktree "$repo" "$issue")
-    ws=$(ensure_ws "$repo")
-    if ! out=$(herdr tab create --workspace "$ws" --cwd "$wt" --label "$issue" --no-focus 2>/dev/null); then
-      rm -f "$WSDIR/$(basename "$repo")"          # stale な workspace_id を捨てて 1 回だけ再試行
-      ws=$(ensure_ws "$repo")
-      out=$(herdr tab create --workspace "$ws" --cwd "$wt" --label "$issue" --no-focus)
-    fi
+    # 既にあったブランチでは、作った時点の HEAD より前のコミットも評価の対象にする
+    if ((existed)); then base=$(merge_base "$wt"); else base=$(git -C "$wt" rev-parse HEAD); fi
+    out=$(create_tab "$repo" "$wt" "$issue")
     pane=$(jq -r '.result.root_pane.pane_id' <<<"$out")
     tab=$(jq -r '.result.tab.tab_id' <<<"$out")
 
@@ -298,13 +411,21 @@ tab: $tab
 plan: -
 prompted: no
 status: working
+eval: $eval_mode
+eval_round: 0
+eval_file: -
+eval_tab: -
+eval_head: -
+eval_passed: -
+eval_note: -
+base: $base
 ---
 ## brief
 $brief
 
 ## log
 EOF
-    log_task "$task" "spawned"
+    log_task "$task" "spawned (eval: $eval_mode)"
 
     if ! out=$(herdr agent start "$name" --kind "$WORKER_KIND" --pane "$pane" --timeout 60000 2>&1); then
       set_field status blocked "$task"
@@ -315,11 +436,19 @@ EOF
     fi
   fi
 
-  local prompt
+  local prompt eval_lines="" f
+  if [[ "$eval_mode" == on ]]; then
+    eval_lines="
+この課題では、review の報告のあとに evaluator が成果物を評価します。plan を書く前と review を報告する前に、次の評価の基準を読んでください。"
+    while read -r f; do
+      [[ -n "$f" ]] && eval_lines="$eval_lines
+- $f"
+    done < <(criteria_files "$repo")
+  fi
   prompt="あなたは csa の Worker です。担当: $issue
 作業ディレクトリ: $wt(ブランチ csa/$issue)
 csa-worker skill に従って作業してください。skill として読み込めない場合は $WORKER_SKILL を読んでください。
-plan を書く場合の保存先: $plan
+plan を書く場合の保存先: $plan$eval_lines
 
 ## brief
 $brief"
@@ -343,38 +472,231 @@ cmd_status() {
   for f in "$TASKS"/*.md; do
     [[ -e "$f" ]] || { echo "(no tasks)"; return 0; }
     issue=$(field issue "$f"); name=$(field agent "$f"); st=$(field status "$f")
+    # 評価中は evaluator の状態を見せる(権限の確認で止まっていないかを確かめるため)
+    [[ "$st" == eval ]] && name=$(agent_name "$issue" e)
     if ! live=$(herdr agent get "$name" 2>/dev/null | jq -r "$STATUS_JQ"); then live="(not running)"; fi
     plan=""
     [[ "$st" == plan ]] && plan=$(field plan "$f")
+    [[ "$st" == eval ]] && plan=$(field eval_file "$f")
     printf '%-16s %-18s %-10s %-12s %s\n' "$issue" "$name" "$st" "$live" "$plan"
   done
 }
 
+# 評価を挟むかどうか: off|limit|passed|nodiff|dirty|run
+eval_decision() {
+  local task="$1" wt head n
+  [[ "$(field_or eval on "$task")" == off ]] && { echo off; return; }
+  (($(field_or eval_round 0 "$task") >= EVAL_MAX_ROUNDS)) && { echo limit; return; }
+  wt=$(field worktree "$task")
+  head=$(git -C "$wt" rev-parse HEAD)
+  [[ "$head" == "$(field_or eval_passed - "$task")" ]] && { echo passed; return; }
+  n=$(git -C "$wt" rev-list --count "$(task_base "$task")..HEAD" 2>/dev/null || echo 1)
+  ((n == 0)) && { echo nodiff; return; }
+  [[ -n "$(git -C "$wt" status --porcelain --untracked-files=no)" ]] && { echo dirty; return; }
+  echo run
+}
+
+# 評価の結果のファイルの次の通し番号
+next_eval_file() {
+  local dir="$EVAL_DIR/results/$1" n=1
+  mkdir -p "$dir"
+  while [[ -e "$dir/impl-$n.md" ]]; do n=$((n + 1)); done
+  echo "$dir/impl-$n.md"
+}
+
+eval_prompt() { # eval_prompt issue task eval_file round
+  local issue="$1" task="$2" file="$3" round="$4" wt repo plan prev="なし" n f lines=""
+  wt=$(field worktree "$task"); repo=$(field repo "$task"); plan=$(field_or plan - "$task")
+  [[ "$plan" == - ]] && plan="なし(brief の受け入れ条件を完了の定義とする)"
+  n=$(basename "$file" .md); n=${n#impl-}
+  if ((round > 1 && n > 1)) && [[ -f "$(dirname "$file")/impl-$((n - 1)).md" ]]; then
+    prev="$(dirname "$file")/impl-$((n - 1)).md"
+  fi
+  while read -r f; do [[ -n "$f" ]] && lines="$lines
+- 基準: $f"; done < <(criteria_files "$repo")
+  while read -r f; do [[ -n "$f" ]] && lines="$lines
+- 文脈(evaluator だけが読む): $f"; done < <(context_files "$wt")
+  cat <<EOF
+あなたは csa の evaluator です。担当: $issue(この話題での $round 回目の評価)
+作業ディレクトリ: $wt(ブランチ csa/$issue)
+手順書 $EVALUATOR_DOC を読み、それに従って評価してください。
+追跡されているファイルの編集、コミット、push はしないでください。
+
+- 結果を書くファイル: $file
+- 前の回の評価: $prev
+- 差分の起点: $(task_base "$task")(git diff と git log で <起点>..HEAD を読む)
+- plan: $plan
+- 人間の発言: 'csa human list $issue' を実行して読む$lines
+
+書き終えたら 'csa report $issue evaluated "<要約>"' を実行してください。
+
+## brief
+$(task_brief "$task")
+EOF
+}
+
+# evaluator を起動する。count=1 なら回数を数える
+eval_start() { # eval_start issue task count
+  local issue="$1" task="$2" count="$3" name wt repo out pane tab file round prompt
+  name=$(agent_name "$issue" e); wt=$(field worktree "$task"); repo=$(field repo "$task")
+  eval_close_tab "$task"
+  round=$(field_or eval_round 0 "$task")
+  # 回数は起動を試みた時点で数える。起動し直し(count=0)では数えない
+  if ((count)); then round=$((round + 1)); set_field eval_round "$round" "$task"; fi
+  ((round > 0)) || round=1
+  file=$(field_or eval_file - "$task")
+  [[ "$file" == - || -e "$file" ]] && file=$(next_eval_file "$issue")
+  set_field eval_file "$file" "$task"
+  set_field eval_head "$(git -C "$wt" rev-parse HEAD)" "$task"
+
+  if ! out=$(create_tab "$repo" "$wt" "$issue-eval" 2>/dev/null); then
+    eval_start_failed "$issue" "$task" "tab を作れなかった"; return 1
+  fi
+  pane=$(jq -r '.result.root_pane.pane_id' <<<"$out"); tab=$(jq -r '.result.tab.tab_id' <<<"$out")
+  set_field eval_tab "$tab" "$task"
+  if ! herdr agent start "$name" --kind "$WORKER_KIND" --pane "$pane" --timeout 60000 >/dev/null 2>&1; then
+    eval_start_failed "$issue" "$task" "起動直後に止まった"; return 1
+  fi
+  prompt=$(eval_prompt "$issue" "$task" "$file" "$round")
+  if ! herdr agent prompt "$name" "$prompt" --wait --until working --timeout 30000 >/dev/null 2>&1; then
+    eval_start_failed "$issue" "$task" "prompt の送信を確認できなかった"; return 1
+  fi
+  set_field status eval "$task"
+  log_task "$task" "eval started: $round 回目 $file"
+}
+
+eval_start_failed() { # eval_start_failed issue task reason
+  set_field status blocked "$2"
+  log_task "$2" "blocked: evaluator を起動できなかった($3)"
+  push_csa "[report] $1 blocked: evaluator を起動できなかった($3)。'csa peek $1 --eval' で確かめ、解消したら 'csa eval on $1' で起動し直す"
+  warn "evaluator を起動できませんでした($3)。CSA に知らせました"
+}
+
+eval_close_tab() {
+  local tab; tab=$(field_or eval_tab - "$1")
+  [[ "$tab" == - ]] && return 0
+  set_field eval_tab - "$1"
+  herdr tab close "$tab" >/dev/null 2>&1 || true
+}
+
+# eval のファイルの verdict
+eval_verdict() { awk '/^verdict:/ { print $2; exit }' "$1" 2>/dev/null || true; }
+
+# eval のファイルの節(## <title>)にある ### の見出しを読点でつなぐ
+eval_headings() {
+  awk -v t="## $2" '
+    $0 == t { on = 1; next }
+    /^## / { on = 0 }
+    on && /^### / { sub(/^### /, ""); out = out (out == "" ? "" : "、") $0 }
+    END { print out }
+  ' "$1" 2>/dev/null || true
+}
+
+eval_count() { # eval_count file title → 節にある ### の見出しの数
+  awk -v t="## $2" '$0 == t { on = 1; next } /^## / { on = 0 } on && /^### / { n++ } END { print n + 0 }' "$1" 2>/dev/null || echo 0
+}
+
+escalation_msg() { # escalation_msg issue file trigger topic
+  echo "[report] $1 blocked: 評価で要相談($3)。eval: $2。論点: ${4:-(eval を読む)}。人間の判断: (a) Worker の案で進める (b) 評価の指摘に従う (c) 範囲か方針を変える (d) 打ち切る"
+}
+
+report_review() { # report_review issue task note → 0 なら通常の review として扱う
+  local issue="$1" task="$2" note="$3" st
+  st=$(field status "$task")
+  [[ "$st" == eval ]] && die "$issue は評価中です。evaluator の結果を待ってください"
+  case "$(eval_decision "$task")" in
+    off|limit|passed) return 0 ;;
+    nodiff) REVIEW_SUFFIX=" / 評価: 省略(差分なし)"; log_task "$task" "eval skipped: 差分なし"; return 0 ;;
+    dirty) die "追跡されているファイルにコミットしていない変更があります。コミットしてから review を報告してください" ;;
+  esac
+  set_field eval_note "$(one_line "$note")" "$task"
+  log_task "$task" "review: $note"
+  eval_start "$issue" "$task" 1 || return 1
+  echo "evaluator を起動しました。結果が届くまで待ってください(push はまだしない)"
+  return 1
+}
+
+report_evaluated() { # report_evaluated issue task note
+  local issue="$1" task="$2" note="$3" file verdict wt worker wnote round msg
+  log_task "$task" "evaluated: $note"
+  if [[ "$(field status "$task")" != eval ]]; then
+    log_task "$task" "評価の結果は記録だけにした(状態が eval でない)"
+    eval_close_tab "$task"; return 0
+  fi
+  file=$(field eval_file "$task"); wt=$(field worktree "$task"); worker=$(field agent "$task")
+  wnote=$(field_or eval_note - "$task"); round=$(field_or eval_round 0 "$task")
+  set_field eval_file - "$task"
+  if [[ "$(git -C "$wt" rev-parse HEAD)" != "$(field eval_head "$task")" || -n "$(git -C "$wt" status --porcelain --untracked-files=no)" ]]; then
+    set_field status blocked "$task"
+    push_csa "[report] $issue blocked: 評価中に worktree が変わったので評価を無効にした。eval: $file"
+    eval_close_tab "$task"; return 0
+  fi
+  verdict=$(eval_verdict "$file")
+  case "$verdict" in
+    pass)
+      set_field eval_round 0 "$task"
+      set_field eval_passed "$(git -C "$wt" rev-parse HEAD)" "$task"
+      set_field status review "$task"
+      push_csa "[report] $issue review: $wnote / 評価: 合格(助言 $(eval_count "$file" 助言) 件)$file"
+      tell_agent "$worker" "評価に合格しました($file)。助言は参考として読んでください。push の許可がある課題では、ここで push してよいです。push したら、もう一度 review で報告してください。"
+      ;;
+    abstain)
+      set_field status review "$task"
+      msg=$(awk '/^verdict:/ { f = 1; next } f && NF { print; exit }' "$file")
+      push_csa "[report] $issue review: $wnote / 評価: 棄権(${msg:-理由なし})$file"
+      tell_agent "$worker" "evaluator は評価を棄権しました($file)。push の許可がある課題では、許可に従って push してよいです。"
+      ;;
+    fail)
+      if ((round >= EVAL_MAX_ROUNDS)); then
+        set_field status blocked "$task"
+        push_csa "$(escalation_msg "$issue" "$file" "同じ話題で $EVAL_MAX_ROUNDS 回不合格" "$(eval_headings "$file" 不合格)")"
+      else
+        set_field status working "$task"
+        tell_agent "$worker" "評価が不合格でした($round/$EVAL_MAX_ROUNDS 回目)。$file の「不合格」の指摘を直して、コミットしてから、もう一度 review で報告してください。push はしないでください。同意できない指摘があれば、直さずに 'csa report $issue blocked \"評価の指摘 <見出し> に同意できない: <理由>\"' で止まってください。"
+      fi
+      ;;
+    escalate)
+      set_field status blocked "$task"
+      push_csa "$(escalation_msg "$issue" "$file" "evaluator が判断できない" "$(eval_headings "$file" 要相談)")"
+      ;;
+    *)
+      set_field status blocked "$task"
+      push_csa "[report] $issue blocked: eval の verdict を読めなかった(${verdict:-なし})。eval: $file"
+      ;;
+  esac
+  log_task "$task" "eval result: ${verdict:-unknown} $file"
+  # evaluator のペインで動いているので、送信をすべて終えてから最後に tab を閉じる
+  eval_close_tab "$task"
+}
+
 cmd_report() {
-  [[ $# -eq 3 ]] || die "usage: csa report <ISSUE> <working|blocked|plan|review|done> <note>"
-  need_home
-  local issue="$1" st="$2" note="$3" task="$TASKS/$1.md" plan
-  [[ -f "$task" ]] || die "no task: $issue"
-  case "$st" in working|blocked|plan|review|done) ;; *) die "bad status: $st" ;; esac
+  [[ $# -eq 3 ]] || die "usage: csa report <ISSUE> <working|blocked|plan|review|done|evaluated> <note>"
+  local issue="$1" st="$2" note="$3" task plan prev
+  task=$(need_task "$issue")
+  case "$st" in working|blocked|plan|review|done|evaluated) ;; *) die "bad status: $st" ;; esac
+  if [[ "$st" == evaluated ]]; then report_evaluated "$issue" "$task" "$note"; return 0; fi
   if [[ "$st" == plan ]]; then
     plan="$CSA_PLANS_DIR/$issue.md"
     [[ -f "$plan" ]] || die "plan ファイルがありません: $plan(書いてから報告してください)"
     set_field plan "$plan" "$task"
   fi
-  set_field status "$st" "$task"
-  log_task "$task" "$st: $note"
-  if [[ "$CSA_PUSH" == 1 && "$st" != working ]]; then
-    # 送れなくてもタスクファイルが正。CSA は 'csa status' で拾える
-    herdr agent prompt csa "[report] $issue $st: $note" >/dev/null 2>&1 \
-      || warn "CSA への push に失敗しました(ファイルには記録済み)"
+  REVIEW_SUFFIX=""
+  if [[ "$st" == review ]]; then
+    report_review "$issue" "$task" "$note" || return 0
   fi
+  prev=$(field status "$task")
+  # blocked の後は人間の判断が入っているので、新しい話題として評価の回数を数え直す
+  [[ "$prev" == blocked && "$st" == working ]] && set_field eval_round 0 "$task"
+  set_field status "$st" "$task"
+  log_task "$task" "$st: $note$REVIEW_SUFFIX"
+  [[ "$st" != working ]] && push_csa "[report] $issue $st: $note$REVIEW_SUFFIX"
+  return 0
 }
 
 cmd_approve() {
   [[ $# -ge 1 && $# -le 2 ]] || die "usage: csa approve <ISSUE> [note]"
-  need_home
-  local issue="$1" note="${2:-}" task="$TASKS/$1.md" st plan name msg
-  [[ -f "$task" ]] || die "no task: $issue"
+  local issue="$1" note="${2:-}" task st plan name msg
+  task=$(need_task "$issue")
   st=$(field status "$task")
   # 二重承認の防止: plan 状態のときだけ送る
   [[ "$st" == plan ]] || die "$issue は plan 状態ではありません(現在: $st)。何も送りません"
@@ -393,23 +715,105 @@ cmd_approve() {
   echo "approved: $issue"
 }
 
+# human(<by>)[ <kind>]: 「<引用>」 / 読み取り: <読み取り> の行を書く
+human_log() { # human_log task by kind quote reading
+  local line
+  [[ -n "${4//[[:space:]]/}" ]] || die "人間の発言の引用が空です"
+  case "$2" in csa|worker|evaluator) ;; *) die "--by は csa、worker、evaluator のどれかです: ${2:-(なし)}" ;; esac
+  line="human($2)${3:+ $3}: 「$(one_line "$4")」"
+  [[ -n "$5" ]] && line="$line / 読み取り: $(one_line "$5")"
+  log_task "$1" "$line"
+}
+
+cmd_human() {
+  local sub="${1:-}" by="" task
+  shift || true
+  case "$sub" in
+    add)
+      [[ $# -ge 1 ]] || die "usage: csa human add <ISSUE> --by <csa|worker|evaluator> \"<発言の引用>\" [\"<読み取り>\"]"
+      task=$(need_task "$1"); shift
+      [[ "${1:-}" == --by ]] && { by="${2:-}"; shift 2 || true; }
+      [[ $# -ge 1 && $# -le 2 ]] || die "usage: csa human add <ISSUE> --by <csa|worker|evaluator> \"<発言の引用>\" [\"<読み取り>\"]"
+      human_log "$task" "$by" "" "$1" "${2:-}"
+      ;;
+    approve)
+      [[ $# -ge 2 && $# -le 3 ]] || die "usage: csa human approve <ISSUE> \"<発言の引用>\" [\"<読み取り>\"]"
+      task=$(need_task "$1")
+      [[ "$(field status "$task")" == plan ]] || die "$1 は plan 状態ではありません(現在: $(field status "$task"))。何も変えません"
+      human_log "$task" worker approve "$2" "${3:-}"
+      set_field status working "$task"
+      ;;
+    list)
+      [[ $# -eq 1 ]] || die "usage: csa human list <ISSUE>"
+      task=$(need_task "$1")
+      grep -E '^- [0-9-]+ [0-9:]+ (human\(|approved: )' "$task" || true
+      ;;
+    *) die "usage: csa human add|approve|list <ISSUE> ..." ;;
+  esac
+}
+
+cmd_eval() {
+  local sub="${1:-}" issue task by="" st
+  shift || true
+  case "$sub" in
+    off)
+      [[ $# -ge 1 ]] || die "usage: csa eval off <ISSUE> --by <csa|worker|evaluator> \"<人間の発言の引用>\""
+      issue="$1"; task=$(need_task "$issue"); shift
+      [[ "${1:-}" == --by ]] && { by="${2:-}"; shift 2 || true; }
+      [[ $# -eq 1 ]] || die "usage: csa eval off <ISSUE> --by <csa|worker|evaluator> \"<人間の発言の引用>\""
+      human_log "$task" "$by" eval-off "$1" ""
+      set_field eval off "$task"
+      st=$(field status "$task")
+      if [[ "$st" == eval ]]; then
+        set_field eval_file - "$task"
+        set_field status review "$task"
+        push_csa "[report] $issue review: $(field_or eval_note - "$task") / 評価: off(人間の指示)"
+      fi
+      eval_close_tab "$task"
+      echo "eval off: $issue"
+      ;;
+    on)
+      [[ $# -eq 1 ]] || die "usage: csa eval on <ISSUE>"
+      issue="$1"; task=$(need_task "$issue")
+      set_field eval on "$task"
+      st=$(field status "$task")
+      # 起動に失敗したか、止まった評価を起動し直す(回数に数えない)
+      if [[ "$(field_or eval_file - "$task")" != - && ( "$st" == eval || "$st" == blocked ) ]]; then
+        log_task "$task" "eval restarted"
+        eval_start "$issue" "$task" 0 || return 1
+        echo "evaluator を起動し直しました: $issue"
+      else
+        log_task "$task" "eval on"
+        echo "eval on: $issue"
+      fi
+      ;;
+    *) die "usage: csa eval on|off <ISSUE> ..." ;;
+  esac
+}
+
 cmd_peek() {
-  [[ $# -ge 1 ]] || die "usage: csa peek <ISSUE> [lines]"
-  local name out
-  name=$(agent_name "$1")
-  out=$(herdr agent read "$name" --source recent-unwrapped --lines "${2:-60}")
+  local issue="" lines=60 prefix=w a name out
+  for a in "$@"; do
+    case "$a" in
+      --eval) prefix=e ;;
+      *) if [[ -z "$issue" ]]; then issue="$a"; else lines="$a"; fi ;;
+    esac
+  done
+  [[ -n "$issue" ]] || die "usage: csa peek <ISSUE> [lines] [--eval]"
+  name=$(agent_name "$issue" "$prefix")
+  out=$(herdr agent read "$name" --source recent-unwrapped --lines "$lines")
   # Codex のように代替スクリーンを使うエージェントはスクロールバックが空なので、見えている画面を読む
   if [[ -z "${out//[[:space:]]/}" ]]; then
-    out=$(herdr agent read "$name" --source visible --lines "${2:-60}")
+    out=$(herdr agent read "$name" --source visible --lines "$lines")
   fi
   printf '%s\n' "$out"
 }
 
 cmd_close() {
   [[ $# -eq 1 ]] || die "usage: csa close <ISSUE>"
-  need_home
-  local task="$TASKS/$1.md" tab
-  [[ -f "$task" ]] || die "no task: $1"
+  local task tab
+  task=$(need_task "$1")
+  eval_close_tab "$task"
   tab=$(field tab "$task")
   herdr tab close "$tab"
   log_task "$task" "closed (worktree kept)"
@@ -425,7 +829,9 @@ case "$sub" in
   status)  cmd_status ;;
   report)  cmd_report "$@" ;;
   approve) cmd_approve "$@" ;;
+  human)   cmd_human "$@" ;;
+  eval)    cmd_eval "$@" ;;
   peek)    cmd_peek "$@" ;;
   close)   cmd_close "$@" ;;
-  *) sed -n '2,12p' "$SELF"; exit 2 ;;
+  *) sed -n '2,14p' "$SELF"; exit 2 ;;
 esac
