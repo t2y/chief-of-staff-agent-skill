@@ -2,6 +2,7 @@
 
 [herdr](https://herdr.dev) 上で、人間の窓口になる 1 体のエージェント（CSA、Chief of Staff Agent）が、課題ごとに Worker エージェントを起動して仕事を割り振るためのキットです。
 人間はふだん CSA と話し、CSA は Worker からの報告をまとめて、blocked、plan、review、判断が必要なことを人間に伝えます。
+Worker が作業を終えると、Worker とは別のエージェント（evaluator）が成果物を評価してから、review として人間に届きます（[evaluator による評価](#evaluator-による評価)）。
 作業の途中では、人間が Worker のペインに移って直接やり取りすることもあります（[Worker と直接やり取りする](#worker-と直接やり取りする)）。
 
 キットは [Agent Skills](https://agentskills.io) の形式の 2 つの skill として配布します。
@@ -9,7 +10,7 @@
 
 | skill | 中身 |
 |---|---|
-| `csa` | CLI（`scripts/csa`）、CSA の手順、CSA の作業ディレクトリに置くテンプレート |
+| `csa` | CLI（`scripts/csa`）、CSA の手順、evaluator の手順（`references/evaluator.md`）、CSA の作業ディレクトリに置くテンプレートと評価の既定の基準 |
 | `csa-worker` | Worker の決まりごと、着手前の見積もりと plan の手順、plan の雛形 |
 
 ```
@@ -103,6 +104,40 @@ Worker は実装を始める前に規模を見積もります。
 変更するファイルが 4 つ以上になる、複数のモジュールにまたがる、公開 API やスキーマが変わる、要件が曖昧で設計の選択肢が複数ある、のどれかに当てはまる課題では、`~/.csa/plans/<ISSUE>.md` に plan を書いて止まります。
 CSA が plan を要約して伝えるので、人間が承認すると Worker が実装を始めます。
 
+### evaluator による評価
+
+Worker が `csa report <ISSUE> review` を報告すると、csa は Worker とは別のエージェント（`e-<issue>`）を、同じ workspace の別の tab（`<ISSUE>-eval`）で起動します。
+evaluator は Worker の会話を引き継がず、brief、plan、評価の基準、人間の発言の記録、差分だけを読んで評価します。
+変更されたモジュールを差分より先に調べ、部分最適になっていないか（統合性）も確かめます。
+評価が終わると tab は閉じます。
+
+| 結果 | その後 |
+|---|---|
+| 合格 | review として CSA に届く。助言があれば添えられる |
+| 不合格 | Worker に差し戻される。同じ話題で 3 回までで、それを超えると人間に判断を仰ぐ |
+| 要相談 | 回数にかかわらず止まり、人間に判断を仰ぐ |
+| 棄権、省略 | 評価なしとして review が届く。コミットのない課題では評価を省く |
+
+既定ではすべての課題を評価します。
+evaluator が要らない課題は、依頼するときに「evaluator は不要」と CSA に伝えてください（CSA が `csa spawn --no-eval` で起動します）。
+作業の途中でも、CSA か Worker のペインで止めるよう伝えれば `csa eval off` で止まります。
+
+Worker は、push を許可された課題でも、評価に合格するまで push しません。
+
+評価の基準と結果は `~/.csa/eval/` に置かれます。
+
+| パス | 中身 | 書く人 |
+|---|---|---|
+| `criteria/default.md` | 既定の基準 | csa（`csa init` と `csa up` のたびに上書き） |
+| `criteria/local.md` | すべてのリポジトリに足す基準 | 人間 |
+| `criteria/repos/<リポジトリ名>.md` | そのリポジトリに足す基準 | 人間 |
+| `context/<プロジェクト>.md` | evaluator だけが読む知識。先頭の `match: <remote のパスの前方>` で対象のリポジトリを決める | 人間 |
+| `results/<ISSUE>/impl-<n>.md` | 評価の結果 | evaluator |
+
+基準は Worker も読みます。`context/` は evaluator だけが読みます。
+
+人間が CSA か Worker のペインで要件や方針を変える発言をすると、聞いた側が `csa human add` で記録し、evaluator はそれを要件の変更として読みます。
+
 ### Worker と直接やり取りする
 
 課題が進む途中で、人間が Worker と直接やり取りする場面は普通にあります。
@@ -126,12 +161,17 @@ CSA はタスク記録と `[report]` から最新の状況を知るので、`csa
 | `csa up` | CSA エージェントを起動する |
 | `csa doctor` | 前提と設定を確かめる（何も変更しない） |
 | `csa version` | バージョンと skill の場所を表示する |
-| `csa spawn <ISSUE> <repo> -` | Worker を起動して brief（標準入力）を渡す |
+| `csa spawn [--no-eval] <ISSUE> <repo> -` | Worker を起動して brief（標準入力）を渡す |
 | `csa status` | 課題の一覧を表示する |
 | `csa report <ISSUE> <status> <note>` | Worker が状態を報告する |
 | `csa approve <ISSUE> [note]` | 承認された plan の実装開始を Worker に伝える |
-| `csa peek <ISSUE> [lines]` | Worker の画面を読む |
-| `csa close <ISSUE>` | Worker の tab を閉じる（worktree は残す） |
+| `csa human add <ISSUE> --by <csa\|worker\|evaluator> "<引用>" ["<読み取り>"]` | 人間の発言を記録する |
+| `csa human approve <ISSUE> "<引用>"` | 人間が Worker のペインで plan を直接承認したことを記録する |
+| `csa human list <ISSUE>` | 記録した人間の発言を表示する |
+| `csa eval off <ISSUE> --by <...> "<引用>"` | 人間の指示で評価を止める |
+| `csa eval on <ISSUE>` | 評価を有効にする。止まった evaluator を起動し直す |
+| `csa peek <ISSUE> [lines] [--eval]` | Worker（`--eval` なら evaluator）の画面を読む |
+| `csa close <ISSUE>` | Worker と evaluator の tab を閉じる（worktree は残す） |
 
 ## エージェントごとの設定
 
@@ -142,13 +182,16 @@ Claude Code 2.1.325 と Codex CLI 0.169.0 で、CSA と Worker の両方の組�
 CSA 用の権限設定は `~/.csa/.claude/settings.json` に置かれます。
 CSA は Edit と Write を禁止されており、コードを書けません。
 
-Worker は対象リポジトリで起動するので、`~/.claude/settings.json` の `permissions.allow` に次を足しておくと、報告と plan の書き込みのたびに止まらずに済みます。
+Worker と evaluator は対象リポジトリで起動するので、`~/.claude/settings.json` の `permissions.allow` に次を足しておくと、報告、人間の発言の記録、plan と評価の結果の書き込みのたびに止まらずに済みます。
 `csa init` は、これらがなければ足すべき行を表示します。
 
 ```json
 "Bash(csa report:*)",
+"Bash(csa human:*)",
 "Edit(~/.csa/plans/**)",
-"Write(~/.csa/plans/**)"
+"Write(~/.csa/plans/**)",
+"Edit(~/.csa/eval/results/**)",
+"Write(~/.csa/eval/results/**)"
 ```
 
 ### Codex
@@ -164,21 +207,22 @@ Codex の既定のサンドボックスでは、worktree の外への書き込�
 `~/.codex/rules/default.rules` に次を足します。
 
 ```python
-# Worker の報告とコミット
+# Worker と evaluator の報告、人間の発言の記録、コミット
 prefix_rule(pattern = ["csa", "report"], decision = "allow")
+prefix_rule(pattern = ["csa", "human"], decision = "allow")
 prefix_rule(pattern = ["git", "add"], decision = "allow")
 prefix_rule(pattern = ["git", "commit"], decision = "allow")
 # CSA が状態を確かめる操作と、人間が承認した plan を伝える操作
-prefix_rule(pattern = ["csa", ["status", "peek", "version", "doctor", "approve"]], decision = "allow")
+prefix_rule(pattern = ["csa", ["status", "peek", "version", "doctor", "approve", "eval"]], decision = "allow")
 prefix_rule(pattern = ["herdr", "agent", ["get", "list", "read", "wait"]], decision = "allow")
 prefix_rule(pattern = ["gh", "issue", "view"], decision = "allow")
 ```
 
-`~/.codex/config.toml` に、plan の保存先への書き込みを足します（パスは `CSA_PLANS_DIR` の絶対パス）。
+`~/.codex/config.toml` に、plan の保存先と評価の結果の保存先への書き込みを足します（パスは `CSA_PLANS_DIR` と `CSA_HOME/eval/results` の絶対パス）。
 
 ```toml
 [sandbox_workspace_write]
-writable_roots = ["/home/<you>/.csa/plans"]
+writable_roots = ["/home/<you>/.csa/plans", "/home/<you>/.csa/eval/results"]
 ```
 
 設定は Codex の起動時に読まれるので、変更後は CSA と Worker を起動し直してください。
@@ -217,6 +261,7 @@ CSA が承認の確認などで止まっている間は送信が拒否されま�
 | `~/.csa/CLAUDE.local.md` | Claude Code の CSA だけに効かせる追記 |
 | `~/.csa/.claude/settings.local.json` | CSA の権限設定への追記 |
 | `~/.csa/worker.local.md` | Worker の決まりごとへの追記 |
+| `~/.csa/eval/criteria/local.md`、`~/.csa/eval/criteria/repos/`、`~/.csa/eval/context/` | 評価の基準と、evaluator だけが読む知識への追記 |
 
 | 環境変数 | 既定値 | 意味 |
 |---|---|---|

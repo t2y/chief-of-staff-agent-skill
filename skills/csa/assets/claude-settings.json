@@ -8,6 +8,8 @@
       "Bash(csa status:*)",
       "Bash(csa peek:*)",
       "Bash(csa approve:*)",
+      "Bash(csa human:*)",
+      "Bash(csa eval:*)",
       "Bash(csa version:*)",
       "Bash(csa doctor:*)",
       "Bash(gh issue view:*)"
