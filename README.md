@@ -14,11 +14,11 @@ Worker が作業を終えると、Worker とは別のエージェント（evalua
 | `csa-worker` | Worker の決まりごと、着手前の見積もりと plan の手順、plan の雛形 |
 
 ```
-workspace: csa                     workspace: <repo>(リポジトリごとに自動作成)
+workspace: csa                     workspace: <repo> (created per repository)
 ┌──────────────────────┐          ┌──────────────┬──────────────┐
 │ csa (CSA)            │  spawn   │ tab PROJ-12  │ tab PROJ-15  │
 │ cwd: ~/.csa          │─────────▶│ w-proj-12    │ w-proj-15    │
-│ 人間のふだんの窓口   │◀─────────│ worktree     │ worktree     │
+│ human's main contact │◀─────────│ worktree     │ worktree     │
 └──────────────────────┘  report  └──────────────┴──────────────┘
 ```
 
